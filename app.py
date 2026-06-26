@@ -2,55 +2,73 @@ import streamlit as st
 import pandas as pd
 
 st.set_page_config(layout="wide")
-st.title("🏦 Procesador Maestro BCP (Corregido)")
+st.title("🏦 Procesador de Conciliación: Orden Maestro")
 
+# Función de carga robusta
 def cargar_archivo(uploaded_file):
-    nombre = uploaded_file.name
-    if nombre.endswith('.csv'):
-        try:
-            return pd.read_csv(uploaded_file, encoding='latin-1', sep=None, engine='python')
-        except:
-            return pd.read_csv(uploaded_file, encoding='utf-8', sep=None, engine='python')
+    if uploaded_file.name.endswith('.csv'):
+        return pd.read_csv(uploaded_file, encoding='latin-1', sep=None, engine='python')
     else:
-        # AQUÍ ESTABA EL ERROR: Cambiado 'openxml' por 'openpyxl'
         df_raw = pd.read_excel(uploaded_file, engine='openpyxl', header=None)
         idx_header = df_raw[df_raw.apply(lambda row: row.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
         return pd.read_excel(uploaded_file, engine='openpyxl', skiprows=idx_header)
 
-archivo_maestro = st.file_uploader("Sube tu Formato Maestro (.csv)", type=["csv", "xlsx"])
-archivo_bcp = st.file_uploader("Sube el archivo BCP", type=["csv", "xlsx"])
+archivo_maestro = st.file_uploader("Sube tu Formato Maestro (.csv o .xlsx)", type=["csv", "xlsx"])
+archivo_bcp = st.file_uploader("Sube el archivo BCP (.csv o .xlsx)", type=["csv", "xlsx"])
 
 if archivo_maestro and archivo_bcp:
     try:
         df_maestro = cargar_archivo(archivo_maestro)
         df_bcp = cargar_archivo(archivo_bcp)
         
-        # Crear estructura vacía basada en el maestro
-        df_res = pd.DataFrame(columns=df_maestro.columns)
-        
-        # Cálculos de fecha
+        # 1. Cálculos de campos
         fechas = pd.to_datetime(df_bcp['Fecha'], dayfirst=True)
+        ops = df_bcp['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
         
-        # Mapeo garantizando el orden
-        df_res['Fecha'] = df_bcp['Fecha']
+        # 2. Creamos un DataFrame nuevo que sigue el orden de tu Maestro
+        # Asignamos los campos que calculamos
+        df_res = pd.DataFrame(index=df_bcp.index)
+        
+        # -- ORDEN EXACTO SEGUN TU FORMATO --
         df_res['Año'] = fechas.dt.year
         df_res['Mes '] = fechas.dt.month
         df_res['Semana'] = fechas.dt.isocalendar().week
         df_res['BANCO'] = '01.BCP'
         df_res['Cuenta'] = '010'
         df_res['Moneda'] = '01.Soles'
-        df_res['Descripción operación'] = df_bcp['Descripción operación']
-        df_res['Monto'] = df_bcp['Monto']
-        df_res['Saldo'] = df_bcp['Saldo']
+        df_res['Fecha'] = df_bcp['Fecha']
+        # (Aquí se insertarán el resto de columnas del maestro)
         
-        # Operación a 8 dígitos exactos
-        ops = df_bcp['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True)
-        df_res['Operación - Número'] = ops.str.zfill(8)
+        # 3. Traemos las columnas que coinciden con el BCP
+        mapeo = {
+            'Descripción operación': 'Descripción operación',
+            'Monto': 'Monto',
+            'Saldo': 'Saldo',
+            'Sucursal - agencia': 'Sucursal - agencia',
+            'Operación - Número': ops,
+            'Operación - Hora': 'Operación - Hora',
+            'Usuario': 'Usuario',
+            'UTC': 'UTC',
+            'Referencia2': 'Referencia2'
+        }
         
-        st.success("✅ ¡El motor de Excel ya funciona correctamente!")
+        for col_maestro, col_bcp in mapeo.items():
+            if isinstance(col_bcp, str) and col_bcp in df_bcp.columns:
+                df_res[col_maestro] = df_bcp[col_bcp]
+            else:
+                df_res[col_maestro] = col_bcp # Caso de las columnas calculadas
+
+        # 4. Asegurar que TODAS las columnas del maestro existan
+        for col in df_maestro.columns:
+            if col not in df_res.columns:
+                df_res[col] = None
+        
+        # 5. FORZAR ORDEN FINAL
+        df_res = df_res[df_maestro.columns]
+        
+        st.success("✅ ¡Orden de columnas ajustado al formato maestro!")
         st.dataframe(df_res.head())
         
-        # Descarga
         csv = df_res.to_csv(index=False).encode('latin-1')
         st.download_button("📥 Descargar Resultado", csv, "resultado_final.csv", "text/csv")
         
