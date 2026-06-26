@@ -8,7 +8,7 @@ st.set_page_config(page_title="Tablero de Conciliación Bancaria", page_icon="�
 st.title("🏦 Sistema Centralizado de Conciliación Multi-Banco")
 st.write("Visualiza, consolida y depura los estados de cuenta eliminando duplicados automáticamente.")
 
-# --- FUNCIÓN DE LIMPIEZA DE TEXTO PARA IDENTIFICACIÓN ---
+# --- FUNCIÓN DE LIMPIEZA ---
 def limpiar_texto(txt):
     if pd.isna(txt): return ""
     txt = str(txt).lower().strip()
@@ -19,12 +19,10 @@ def limpiar_texto(txt):
     txt = re.sub(r'[úüûù]', 'u', txt)
     return re.sub(r'[^a-z0-9]', '', txt)
 
-# --- MOTOR DE DETECCIÓN Y PROCESAMIENTO ---
+# --- MOTOR AVANZADO DE DETECCIÓN ---
 def procesar_archivo_bancario(file_upload):
-    """Lee el archivo, detecta dinámicamente el membrete, la cuenta y las columnas"""
     df_raw = pd.read_excel(file_upload, header=None)
     
-    # 1. Extraer el texto de la cuenta/banco desde el membrete (primeras filas)
     cuenta_origen = "No detectada"
     for fila in range(min(5, len(df_raw))):
         valores = df_raw.iloc[fila].dropna().tolist()
@@ -32,7 +30,6 @@ def procesar_archivo_bancario(file_upload):
             cuenta_origen = " - ".join([str(v) for v in valores])
             break
 
-    # 2. Buscar en qué fila empiezan los encabezados reales de la tabla
     fila_cabecera = 0
     for idx, row in df_raw.iterrows():
         valores_limpios = [limpiar_texto(x) for x in row.values]
@@ -40,49 +37,62 @@ def procesar_archivo_bancario(file_upload):
             fila_cabecera = idx
             break
             
-    # 3. Leer el archivo real desde la fila correcta
     df = pd.read_excel(file_upload, skiprows=fila_cabecera)
-    df.columns = [str(c).strip() for c in df.columns] # Limpiar espacios fantasmas en títulos
+    df.columns = [str(c).strip() for c in df.columns] 
     
-    # 4. Mapear nombres variables internos para la lógica del sistema
+    columnas_nuevas = {}
+    
+    # FASE 1: Búsqueda estricta de nombres EXACTOS (Escudo principal)
     for col in df.columns:
         col_l = limpiar_texto(col)
-        # Detecta variaciones de "Operación - Número" o "Número - Operación"
-        if ("operacion" in col_l and "numero" in col_l) or (col_l in ["operacion", "numero", "nroop", "numoperacion"]):
-            df.rename(columns={col: 'KEY_ID'}, inplace=True)
-        if "ordenante" in col_l or "nombre" in col_l:
-            df.rename(columns={col: 'Nombre del Ordenante'}, inplace=True)
-        if "fecha" in col_l:
-            df.rename(columns={col: 'KEY_FECHA'}, inplace=True)
-        if "monto" in col_l or "abono" in col_l or "credito" in col_l or "importe" in col_l:
-            df.rename(columns={col: 'KEY_MONTO'}, inplace=True)
-        if "saldo" in col_l:
-            df.rename(columns={col: 'KEY_SALDO'}, inplace=True)
+        if "KEY_ID" not in columnas_nuevas.values() and col_l in ["operacion", "numero", "nroop", "numoperacion"]:
+            columnas_nuevas[col] = 'KEY_ID'
+        elif "Nombre del Ordenante" not in columnas_nuevas.values() and col_l in ["ordenante", "nombre"]:
+            columnas_nuevas[col] = 'Nombre del Ordenante'
+        elif "KEY_FECHA" not in columnas_nuevas.values() and col_l == "fecha":
+            columnas_nuevas[col] = 'KEY_FECHA'
+        elif "KEY_MONTO" not in columnas_nuevas.values() and col_l in ["monto", "abono", "cargo", "importe"]:
+            columnas_nuevas[col] = 'KEY_MONTO'
+        elif "KEY_SALDO" not in columnas_nuevas.values() and col_l == "saldo":
+            columnas_nuevas[col] = 'KEY_SALDO'
+
+    # FASE 2: Búsqueda por coincidencias PARCIALES (Para columnas de bancos con nombres compuestos)
+    for col in df.columns:
+        if col in columnas_nuevas: continue
+        col_l = limpiar_texto(col)
+        if "KEY_ID" not in columnas_nuevas.values() and ("operacion" in col_l and "numero" in col_l):
+            columnas_nuevas[col] = 'KEY_ID'
+        elif "Nombre del Ordenante" not in columnas_nuevas.values() and ("ordenante" in col_l or "nombre" in col_l):
+            columnas_nuevas[col] = 'Nombre del Ordenante'
+        elif "KEY_FECHA" not in columnas_nuevas.values() and "fecha" in col_l:
+            columnas_nuevas[col] = 'KEY_FECHA'
+        elif "KEY_MONTO" not in columnas_nuevas.values() and ("monto" in col_l or "abono" in col_l or "credito" in col_l or "importe" in col_l):
+            columnas_nuevas[col] = 'KEY_MONTO'
+        elif "KEY_SALDO" not in columnas_nuevas.values() and "saldo" in col_l:
+            columnas_nuevas[col] = 'KEY_SALDO'
             
+    df.rename(columns=columnas_nuevas, inplace=True)
+    
     if 'KEY_ID' in df.columns:
         df['KEY_ID'] = df['KEY_ID'].astype(str).str.strip()
         
     return df, cuenta_origen
 
-# --- PANEL LATERAL DE CARGA ---
+# --- INTERFAZ WEB ---
 with st.sidebar:
     st.header("⚙️ Carga de Archivos")
     archivo_p = st.file_uploader("1. Sube el Extracto Principal (.xlsx)", type=["xlsx"])
     archivos_s = st.file_uploader("2. Sube los Archivos Secundarios (.xlsx)", type=["xlsx"], accept_multiple_files=True)
 
-# --- PROCESAMIENTO PRINCIPAL ---
 if archivo_p and archivos_s:
     try:
-        # Procesar el archivo principal
         df_principal, cuenta_p = procesar_archivo_bancario(archivo_p)
         
         if 'KEY_ID' not in df_principal.columns:
             st.error("❌ No se pudo identificar la columna de número de operación en el archivo principal.")
         else:
-            # Inyectar metadato de cuenta de origen
             df_principal['Cuenta Origen'] = cuenta_p
             
-            # Procesar todos los archivos secundarios
             lista_secundarios = []
             for f_sec in archivos_s:
                 df_sec, _ = procesar_archivo_bancario(f_sec)
@@ -94,31 +104,30 @@ if archivo_p and archivos_s:
                     lista_secundarios.append(df_sec[columnas_validar])
             
             if not lista_secundarios:
-                st.error("❌ Ninguno de los archivos secundarios contiene las columnas requeridas para el cruce.")
+                st.error("❌ Ninguno de los archivos secundarios contiene las columnas requeridas.")
             else:
-                # Consolidar base secundaria
                 df_secundarios_total = pd.concat(lista_secundarios, ignore_index=True)
                 
-                # --- VALIDACIÓN ANTI-DUPLICADOS AVANZADA ---
-                # Definir criterios estrictos basados en tus directivas (Misma fecha, operación y saldo final)
                 criterio_duplicados = ['KEY_ID']
                 if 'KEY_FECHA' in df_secundarios_total.columns: criterio_duplicados.append('KEY_FECHA')
                 if 'KEY_MONTO' in df_secundarios_total.columns: criterio_duplicados.append('KEY_MONTO')
                 if 'KEY_SALDO' in df_secundarios_total.columns: criterio_duplicados.append('KEY_SALDO')
                 
                 filas_antes = len(df_secundarios_total)
-                # Eliminar registros duplicados interdiarios manteniendo solo el primero válido
                 df_secundarios_total = df_secundarios_total.drop_duplicates(subset=criterio_duplicados, keep='first')
                 df_secundarios_total = df_secundarios_total.drop_duplicates(subset=['KEY_ID'], keep='first')
                 filas_despues = len(df_secundarios_total)
                 
-                # Reducir base secundaria para el join limpio
                 df_secundarios_final = df_secundarios_total[['KEY_ID', 'Nombre del Ordenante']]
                 
-                # --- EJECUTAR CRUCE (LEFT JOIN) ---
                 resultado = pd.merge(df_principal, df_secundarios_final, on='KEY_ID', how='left')
                 
-                # Normalizar nombres visuales para la exportación final
+                # --- ESCUDO ANTI-DUPLICIDAD DE COLUMNAS ---
+                nombres_destino = ['Operación - Número', 'Fecha', 'Monto', 'Saldo Final', 'Nombre del Ordenante', 'Cuenta Origen']
+                for nombre in nombres_destino:
+                    if nombre in resultado.columns:
+                        resultado = resultado.drop(columns=[nombre])
+                
                 resultado.rename(columns={
                     'KEY_ID': 'Operación - Número',
                     'KEY_FECHA': 'Fecha',
@@ -126,10 +135,6 @@ if archivo_p and archivos_s:
                     'KEY_SALDO': 'Saldo Final'
                 }, inplace=True)
                 
-                # =====================================================================
-                # 📋 CONFIGURACIÓN EXCLUSIVA DE TU FORMATO HISTÓRICO
-                # =====================================================================
-                # Orden exacto de los campos que manejas para evitar errores de estructura:
                 columnas_formato_antiguo = [
                     'Fecha',
                     'Operación - Número',
@@ -139,16 +144,11 @@ if archivo_p and archivos_s:
                     'Cuenta Origen'
                 ]
                 
-                # Asegurar que solo se exporten las columnas deseadas en ese orden exacto
-                # Si el archivo principal contiene columnas adicionales, puedes agregarlas aquí
                 columnas_finales = [c for c in columnas_formato_antiguo if c in resultado.columns]
-                resultado_formateado = resultado[columnas_finales]
-                # =====================================================================
+                resultado_formateado = resultado[columnas_finales].copy()
                 
-                # --- INTERFAZ DE VISUALIZACIÓN WEB ---
                 st.success(f"🎉 ¡Conciliación y depuración completada! Se eliminaron {filas_antes - filas_despues} registros duplicados de abonos.")
                 
-                # Panel Métricas rápidas
                 m1, m2, m3 = st.columns(3)
                 with m1: st.metric("Total Operaciones", f"{len(resultado_formateado)}")
                 with m2: st.metric("Cuenta de Origen", f"{cuenta_p[:30]}...")
