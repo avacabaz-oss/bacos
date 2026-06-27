@@ -72,9 +72,14 @@ if archivo_banco:
         st.success("✅ Estructura adaptada perfectamente al Maestro.")
         st.dataframe(df_nuevo.head())
         
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+      output = io.BytesIO()
+        # Usamos engine='openpyxl' en lugar de 'xlsxwriter'
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_nuevo.to_excel(writer, index=False)
-        st.download_button("💾 Descargar Excel con Formato Maestro", output.getvalue(), "resultado_consolidado.xlsx")
-    except Exception as e:
-        st.error(f"Error procesando: {e}")
+        
+        st.download_button(
+            label="💾 Descargar Excel con Formato Maestro", 
+            data=output.getvalue(), 
+            file_name="resultado_consolidado.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
