@@ -1,59 +1,80 @@
 import streamlit as st
 import pandas as pd
+import io
 
-st.set_page_config(layout="wide", page_title="Gestor Bancario Permanente")
-st.title("🏦 Gestor Bancario: Maestro Permanente")
+st.set_page_config(layout="wide")
+st.title("🏦 Procesador Maestro de Conciliación")
 
-# --- MEMORIA PERMANENTE ---
-if 'df_maestro' not in st.session_state:
-    st.session_state.df_maestro = None
+# 1. Definición del orden maestro (Inmutable)
+COLUMNAS_MAESTRO = [
+    'Año', 'Mes ', 'Semana', 'BANCO', 'Cuenta', 'Moneda', 'Fecha', 'Fecha valuta', 
+    'Descripción operación', 'Monto', 'Saldo', 'Sucursal - agencia', 
+    'Operación - Número', 'Operación - Hora', 'Usuario', 'UTC', 'Referencia2', 
+    'Factura', 'Glosa', 'Estado', 'Rubro de ingreso', 'Tipos de ingresos', 
+    'Tipo Op', 'ordenante'
+]
 
-# --- CARGA DEL MAESTRO (SOLO UNA VEZ) ---
-if st.session_state.df_maestro is None:
-    archivo_maestro = st.file_uploader("📂 Sube tu Formato Maestro (.csv)", type=["csv"])
-    if archivo_maestro:
-        st.session_state.df_maestro = pd.read_csv(archivo_maestro)
-        st.success("✅ Maestro cargado en memoria. ¡Ya puedes procesar extractos!")
-        st.rerun() # Recargamos para ocultar el cargador
-else:
-    st.info("✅ Maestro activo en sistema. (Si necesitas cambiarlo, recarga la página)")
+def procesar_archivo_bancario(archivo):
+    # Detectar tipo de archivo
+    if archivo.name.endswith('.csv'):
+        df_raw = pd.read_csv(archivo, header=None)
+    else:
+        df_raw = pd.read_excel(archivo, header=None)
 
-# --- PROCESAMIENTO DE EXTRACTOS (INFINITO) ---
-if st.session_state.df_maestro is not None:
-    archivo_banco = st.file_uploader("📥 Sube Nuevo Extracto Bancario", type=["csv", "xlsx"])
+    # Detectar metadatos (Cuenta y Moneda)
+    cuenta_full = str(df_raw.iloc[0, 1])
+    cuenta_final = cuenta_full.split('-')[1] if '-' in cuenta_full else cuenta_full[-7:]
+    moneda = "01.Soles" if "Soles" in str(df_raw.iloc[1, 1]) else "02.Dolares"
     
-    if archivo_banco:
-        try:
-            # Lógica de carga (detectando encabezados desde 'Fecha')
-            df_raw = pd.read_csv(archivo_banco) if archivo_banco.name.endswith('.csv') else pd.read_excel(archivo_banco, header=None)
-            idx = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].idxmax()[0]
-            df_nuevo = pd.read_csv(archivo_banco, skiprows=idx) if archivo_banco.name.endswith('.csv') else pd.read_excel(archivo_banco, skiprows=idx)
-            df_nuevo.columns = df_nuevo.columns.str.strip()
+    # Buscar inicio de tabla
+    idx = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].idxmax()[0]
+    
+    # Leer datos reales
+    df = pd.read_csv(archivo, skiprows=idx) if archivo.name.endswith('.csv') else pd.read_excel(archivo, skiprows=idx)
+    df.columns = df.columns.str.strip()
+    
+    # Construir resultado vacío con columnas maestro
+    df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
+    
+    # Cálculos dinámicos
+    fechas = pd.to_datetime(df['Fecha'], dayfirst=True)
+    
+    # Mapeo
+    df_res['Año'] = fechas.dt.year
+    df_res['Mes '] = fechas.dt.month
+    df_res['Semana'] = fechas.dt.isocalendar().week
+    df_res['BANCO'] = '01.BCP'
+    df_res['Cuenta'] = cuenta_final
+    df_res['Moneda'] = moneda
+    
+    # Mapeo de columnas existentes en el BCP
+    mapeo_simple = {
+        'Fecha': 'Fecha', 'Fecha valuta': 'Fecha valuta', 'Descripción operación': 'Descripción operación',
+        'Monto': 'Monto', 'Saldo': 'Saldo', 'Sucursal - agencia': 'Sucursal - agencia',
+        'Operación - Hora': 'Operación - Hora', 'Usuario': 'Usuario', 'UTC': 'UTC', 'Referencia2': 'Referencia2'
+    }
+    
+    for col_maestro, col_bcp in mapeo_simple.items():
+        if col_bcp in df.columns:
+            df_res[col_maestro] = df[col_bcp]
             
-            # --- TRANSFORMACIÓN A FORMATO MAESTRO ---
-            fechas = pd.to_datetime(df_nuevo['Fecha'], dayfirst=True)
-            
-            df_res = pd.DataFrame(columns=st.session_state.df_maestro.columns)
-            df_res['Fecha'] = df_nuevo['Fecha']
-            df_res['Año'] = fechas.dt.year
-            df_res['Mes '] = fechas.dt.month
-            df_res['Semana'] = fechas.dt.isocalendar().week
-            df_res['BANCO'] = '01.BCP'
-            df_res['Cuenta'] = '010'
-            df_res['Moneda'] = '01.Soles'
-            df_res['Descripción operación'] = df_nuevo['Descripción operación']
-            df_res['Monto'] = df_nuevo['Monto']
-            df_res['Operación - Número'] = df_nuevo['Operación - Número'].astype(str).str.zfill(8)
-            
-            # Unir al Maestro en memoria
-            st.session_state.df_maestro = pd.concat([st.session_state.df_maestro, df_res], ignore_index=True)
-            
-            st.success("🎉 ¡Extracto integrado al Maestro en memoria!")
-            st.dataframe(st.session_state.df_maestro.tail(10))
-            
-            # Botón de descarga
-            csv = st.session_state.df_maestro.to_csv(index=False).encode('latin-1')
-            st.download_button("💾 Descargar Maestro Actualizado", csv, "Base_Acumulada.csv")
-            
-        except Exception as e:
-            st.error(f"Error: {e}")
+    # Mapeo especial
+    df_res['Operación - Número'] = df['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
+    
+    return df_res
+
+# Interfaz
+archivo_banco = st.file_uploader("📥 Sube nuevo Extracto BCP (Excel o CSV)", type=["xlsx", "csv"])
+
+if archivo_banco:
+    try:
+        df_nuevo = procesar_archivo_bancario(archivo_banco)
+        st.success("✅ Estructura adaptada perfectamente al Maestro.")
+        st.dataframe(df_nuevo.head())
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_nuevo.to_excel(writer, index=False)
+        st.download_button("💾 Descargar Excel con Formato Maestro", output.getvalue(), "resultado_consolidado.xlsx")
+    except Exception as e:
+        st.error(f"Error procesando: {e}")
