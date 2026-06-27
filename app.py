@@ -1,66 +1,58 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 
 st.set_page_config(layout="wide")
-st.title("🏦 Procesador Maestro: Versión Blindada")
+st.title("🏦 Conciliador Maestro: Extracción Inteligente")
 
-# Función de carga robusta
-def cargar_archivo(uploaded_file):
-    if uploaded_file.name.endswith('.csv'):
-        for enc in ['latin-1', 'utf-8', 'cp1252']:
-            try:
-                return pd.read_csv(uploaded_file, encoding=enc, sep=None, engine='python')
-            except:
-                continue
-        return pd.read_csv(uploaded_file)
-    else:
-        df_raw = pd.read_excel(uploaded_file, engine='openpyxl', header=None)
-        mask = df_raw.apply(lambda row: row.astype(str).str.contains('Fecha', na=False).any(), axis=1)
-        if mask.any():
-            idx_header = mask.idxmax()
-            return pd.read_excel(uploaded_file, engine='openpyxl', skiprows=idx_header)
-        return pd.read_excel(uploaded_file)
+def extraer_metadatos_bcp(archivo):
+    # Leemos solo las primeras 4 filas para extraer los metadatos
+    meta = pd.read_csv(archivo, nrows=4, header=None)
+    # Extraer cuenta (fila 0, col 1) y moneda (fila 1, col 1)
+    cuenta_full = str(meta.iloc[0, 1])
+    cuenta_corta = cuenta_full.split('-')[-2] if '-' in cuenta_full else cuenta_full[-3:]
+    moneda = "01.Soles" if "Soles" in str(meta.iloc[1, 1]) else "02.Dolares"
+    return cuenta_corta, moneda
 
-archivo_maestro = st.file_uploader("Sube tu Formato Maestro (.csv o .xlsx)", type=["csv", "xlsx"])
-archivo_bcp = st.file_uploader("Sube el Extracto BCP (.csv o .xlsx)", type=["csv", "xlsx"])
+def procesar_archivo(archivo):
+    # 1. Extraer metadatos
+    cuenta, moneda = extraer_metadatos_bcp(archivo)
+    
+    # 2. Leer tabla real (saltando 4 filas)
+    df = pd.read_csv(archivo, skiprows=4)
+    df.columns = df.columns.str.strip()
+    
+    # 3. Normalizar al Formato Maestro
+    fechas = pd.to_datetime(df['Fecha'], dayfirst=True)
+    df_res = pd.DataFrame()
+    
+    df_res['Fecha'] = df['Fecha']
+    df_res['Año'] = fechas.dt.year
+    df_res['Mes '] = fechas.dt.month
+    df_res['Semana'] = fechas.dt.isocalendar().week
+    df_res['BANCO'] = '01.BCP'
+    df_res['Cuenta'] = cuenta
+    df_res['Moneda'] = moneda
+    df_res['Descripción operación'] = df['Descripción operación']
+    df_res['Monto'] = df['Monto']
+    df_res['Saldo'] = df['Saldo']
+    df_res['Operación - Número'] = df['Operación - Número'].astype(str).str.zfill(8)
+    
+    return df_res
 
-if archivo_maestro and archivo_bcp:
-    try:
-        df_maestro = cargar_archivo(archivo_maestro)
-        df_bcp = cargar_archivo(archivo_bcp)
-        
-        # Normalizar nombres de columnas
-        df_bcp.columns = [str(c).strip() for c in df_bcp.columns]
-        
-        # Crear estructura vacía del maestro
-        df_res = pd.DataFrame(columns=df_maestro.columns)
-        
-        # Calcular campos base
-        fechas = pd.to_datetime(df_bcp['Fecha'], dayfirst=True)
-        ops = df_bcp['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-        
-        # Asignación segura
-        def asignar(col_nombre, valor):
-            if col_nombre in df_res.columns:
-                df_res[col_nombre] = valor
+# Interfaz
+archivo_maestro = st.file_uploader("📂 Sube tu Maestro Acumulado (.csv)", type=["csv"])
+archivo_nuevo = st.file_uploader("📥 Sube Nuevo Extracto BCP (.csv)", type=["csv"])
 
-        asignar('Fecha', df_bcp['Fecha'])
-        asignar('Año', fechas.dt.year)
-        asignar('Mes ', fechas.dt.month)
-        asignar('Semana', fechas.dt.isocalendar().week)
-        asignar('BANCO', '01.BCP')
-        asignar('Cuenta', '010')
-        asignar('Moneda', '01.Soles')
-        asignar('Descripción operación', df_bcp.get('Descripción operación', ''))
-        asignar('Monto', df_bcp.get('Monto', 0))
-        asignar('Saldo', df_bcp.get('Saldo', 0))
-        asignar('Operación - Número', ops)
-        
-        st.success("✅ ¡Procesado exitosamente!")
-        st.dataframe(df_res.head())
-        
-        csv = df_res.to_csv(index=False).encode('latin-1')
-        st.download_button("📥 Descargar", csv, "resultado_final.csv", "text/csv")
-        
-    except Exception as e:
-        st.error(f"Error Técnico: {e}")
+if archivo_maestro and archivo_nuevo:
+    df_maestro = pd.read_csv(archivo_maestro)
+    df_nuevo = procesar_archivo(archivo_nuevo)
+    
+    # Unir y guardar
+    df_final = pd.concat([df_maestro, df_nuevo], ignore_index=True)
+    
+    st.success(f"✅ Integrado. Cuenta detectada: {df_nuevo['Cuenta'].iloc[0]} | Moneda: {df_nuevo['Moneda'].iloc[0]}")
+    st.dataframe(df_final.tail(10))
+    
+    csv = df_final.to_csv(index=False).encode('latin-1')
+    st.download_button("💾 Descargar Maestro Actualizado", csv, "Base_Acumulada.csv")
