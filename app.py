@@ -17,28 +17,27 @@ COLUMNAS_MAESTRO = [
 def procesar_archivo_bancario(archivo):
     # Detectar tipo de archivo
     if archivo.name.endswith('.csv'):
-        # Leer primero sin encabezado para metadatos
         df_raw = pd.read_csv(archivo, header=None)
-        # Buscar fila de encabezados por la palabra 'Fecha'
-        idx = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].idxmax()[0]
+        idx = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
         df = pd.read_csv(archivo, skiprows=idx)
     else:
         df_raw = pd.read_excel(archivo, header=None)
-        idx = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].idxmax()[0]
+        idx = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
         df = pd.read_excel(archivo, skiprows=idx)
         
     df.columns = df.columns.str.strip()
     
-    # Extraer metadatos (Cuenta y Moneda)
+    # NUEVA LÓGICA DE EXTRACCIÓN DE CUENTA
     cuenta_full = str(df_raw.iloc[0, 1])
-    cuenta_final = cuenta_full.split('-')[1] if '-' in cuenta_full else cuenta_full[-7:]
+    cuenta_final = cuenta_full.replace('-', '').strip()[-3:]
+    
     moneda = "01.Soles" if "Soles" in str(df_raw.iloc[1, 1]) else "02.Dolares"
     
     # Construir resultado
     df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
     fechas = pd.to_datetime(df['Fecha'], dayfirst=True)
     
-    # Asignación
+    # Asignación de columnas calculadas
     df_res['Año'] = fechas.dt.year
     df_res['Mes '] = fechas.dt.month
     df_res['Semana'] = fechas.dt.isocalendar().week
@@ -47,7 +46,7 @@ def procesar_archivo_bancario(archivo):
     df_res['Moneda'] = moneda
     df_res['Fecha'] = df['Fecha']
     
-    # Mapeo simple
+    # Mapeo simple de columnas del extracto
     mapeo = {
         'Fecha valuta': 'Fecha valuta', 'Descripción operación': 'Descripción operación',
         'Monto': 'Monto', 'Saldo': 'Saldo', 'Sucursal - agencia': 'Sucursal - agencia',
@@ -62,16 +61,16 @@ def procesar_archivo_bancario(archivo):
     
     return df_res
 
-# Interfaz
+# Interfaz de usuario
 archivo_banco = st.file_uploader("📥 Sube Extracto BCP (Excel o CSV)", type=["xlsx", "csv"])
 
 if archivo_banco:
     try:
         df_nuevo = procesar_archivo_bancario(archivo_banco)
-        st.success("✅ Estructura adaptada perfectamente.")
+        st.success(f"✅ Estructura adaptada. Cuenta procesada: {df_nuevo['Cuenta'].iloc[0]}")
         st.dataframe(df_nuevo.head())
         
-        # Bloque de descarga alineado correctamente
+        # Preparación del archivo de descarga
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df_nuevo.to_excel(writer, index=False)
