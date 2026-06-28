@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import re  # Añadimos esta librería para limpiar textos
 
 st.set_page_config(layout="wide")
 st.title("🏦 Procesador Maestro de Conciliación")
@@ -27,9 +28,12 @@ def procesar_archivo_bancario(archivo):
         
     df.columns = df.columns.str.strip()
     
-    # NUEVA LÓGICA DE EXTRACCIÓN DE CUENTA
+    # NUEVA LÓGICA BLINDADA DE EXTRACCIÓN DE CUENTA
     cuenta_full = str(df_raw.iloc[0, 1])
-    cuenta_final = cuenta_full.replace('-', '').strip()[-3:]
+    # re.sub(r'\D', '', ...) elimina TODO lo que no sea un número (letras, guiones, espacios)
+    solo_numeros = re.sub(r'\D', '', cuenta_full)
+    # Extraemos los últimos 3 de la cadena ya limpia de letras
+    cuenta_final = solo_numeros[-3:] if solo_numeros else "000"
     
     moneda = "01.Soles" if "Soles" in str(df_raw.iloc[1, 1]) else "02.Dolares"
     
