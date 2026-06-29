@@ -155,5 +155,4 @@ if not st.session_state.df_consolidado.empty:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 else:
-    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP o BBVA para comenzar la acumulación permanente.")    except Exception as e:
-        st.error(f"Error procesando: {e}")
+    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP o BBVA para comenzar la acumulación permanente.")
