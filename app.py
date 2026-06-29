@@ -96,6 +96,29 @@ if archivo_banco:
             df_nuevo['Monto'] = pd.to_numeric(df_nuevo['Monto'], errors='coerce').fillna(0.0)
             df_nuevo['Tipo Op'] = df_nuevo['Monto'].apply(lambda x: 'INGRESO' if x > 0 else ('EGRESO' if x < 0 else ''))
             
+            # =========================================================================
+            # CONCATENACIÓN AUTOMÁTICA Y ESTÁNDAR DE LA GLOSA MAESTRA
+            # =========================================================================
+            diccionario_bancos = {
+                '01.BCP': 'BCP',
+                '02.BBVA': 'BBVA',
+                '03.INTERBANK': 'ITB',
+                '04.SCOTIABANK': 'SCT',
+                '05.BN': 'BN'
+            }
+            
+            # Obtener sigla resumida o mantener el nombre original si no está en el diccionario
+            banco_resumido = df_nuevo['BANCO'].map(diccionario_bancos).fillna(df_nuevo['BANCO']).astype(str)
+            cuenta_limpia = df_nuevo['Cuenta'].fillna('000').astype(str)
+            fecha_limpia = df_nuevo['Fecha'].fillna('').astype(str)
+            operacion_limpia = df_nuevo['Operación - Número'].fillna('').astype(str)
+            
+            # Unificación bajo la estructura estricta con un espacio de separación
+            df_nuevo['Glosa'] = banco_resumido + " " + cuenta_limpia + " " + fecha_limpia + " " + operacion_limpia
+            
+            # =========================================================================
+            # CONTROL DE DUPLICADOS (HISTÓRICO Y EN ARCHIVO)
+            # =========================================================================
             df_nuevo = df_nuevo.dropna(subset=['Año'])
             filas_originales = len(df_nuevo)
             
