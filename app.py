@@ -1,178 +1,144 @@
+import streamlit as st
 import pandas as pd
+import io
 import re
+from motores_bancarios import (
+    procesar_banco_nacion,
+    procesar_scotiabank,
+    procesar_interbank,
+    procesar_bbva,
+    procesar_bcp
+)
 
-def procesar_banco_nacion(df_raw, texto_muestra, columnas_maestro):
-    idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Trans\.|Abono', na=False).any(), axis=1)].index[0]
-    df_datos = df_raw.iloc[idx_header+1:].copy()
-    df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
-    df_datos = df_datos[df_datos['Fecha'].notna()]
-    
-    cuenta_final = "897"
-    moneda = "01.Soles"
-    
-    fecha_limpia = df_datos['Fecha'].astype(str).str.replace('.', '-', regex=False).str.strip()
-    fechas = pd.to_datetime(fecha_limpia, format='%Y-%m-%d', errors='coerce')
-    
-    def transformar_monto(val):
-        val_str = str(val).replace(',', '').strip()
-        if val_str == '' or val_str.lower() == 'nan':
-            return 0.0
-        try:
-            return float(val_str)
-        except:
-            return 0.0
-    
-    abonos = df_datos['Abono'].apply(transformar_monto)
-    cargos = df_datos['Cargo'].apply(transformar_monto)
-    monto_final = abonos.where(abonos != 0, -cargos)
-    
-    df_res = pd.DataFrame(columns=columnas_maestro)
-    df_res['Año'] = fechas.dt.year
-    df_res['Mes '] = fechas.dt.month
-    df_res['Semana'] = fechas.dt.isocalendar().week
-    df_res['BANCO'] = "05.BN"
-    df_res['Cuenta'] = cuenta_final
-    df_res['Moneda'] = moneda
-    df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
-    df_res['Descripción operación'] = df_datos['RUC'].fillna('').astype(str).str.replace(r'\.0', '', regex=True)
-    df_res['Operación - Número'] = df_datos['Documento'].fillna('').astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-    df_res['Monto'] = monto_final
-    df_res['Sucursal - agencia'] = df_datos['Oficina'].astype(str).str.replace(r'\.0', '', regex=True)
-    return df_res
+st.set_page_config(layout="wide")
+st.title("Hub de Consolidación Bancaria Automatizada")
 
-def procesar_scotiabank(df_raw, texto_muestra, columnas_maestro):
-    idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any() and r.astype(str).str.contains('Movimiento', na=False).any(), axis=1)].index[0]
-    df_datos = df_raw.iloc[idx_header+1:].copy()
-    df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
-    df_datos = df_datos[df_datos['Fecha'].notna()]
-    
-    cuenta_final, moneda = "000", "01.Soles"
-    for _, row in df_raw.head(idx_header).iterrows():
-        linea = " ".join([str(val) for val in row.values])
-        if "cuenta" in linea.lower() or "ccmn" in linea.lower() or "ccmd" in linea.lower():
-            solo_nums = re.sub(r'\D', '', linea)
-            cuenta_final = solo_nums[-3:] if solo_nums else "000"
-            if "ccmd" in linea.lower() or "usd" in linea.lower() or "dolares" in linea.upper():
-                moneda = "02.Dolares"
-            break
+# 1. Estructura Única del Libro Mayor (Inmutable)
+COLUMNAS_MAESTRO = [
+    'Año', 'Mes ', 'Semana', 'BANCO', 'Cuenta', 'Moneda', 'Fecha', 'Fecha valuta', 
+    'Descripción operación', 'Monto', 'Saldo', 'Sucursal - agencia', 
+    'Operación - Número', 'Operación - Hora', 'Usuario', 'UTC', 'Referencia2', 
+    'Factura', 'Glosa', 'Estado', 'Rubro de ingreso', 'Tipos de ingresos', 
+    'Tipo Op', 'ordenante'
+]
+
+# Inicializar la base de datos histórica en memoria
+if 'df_consolidado' not in st.session_state:
+    st.session_state.df_consolidado = pd.DataFrame(columns=COLUMNAS_MAESTRO)
+
+if st.sidebar.button("🧹 Limpiar Base Histórica"):
+    st.session_state.df_consolidado = pd.DataFrame(columns=COLUMNAS_MAESTRO)
+    st.sidebar.success("Base histórica reiniciada correctamente.")
+
+# Única zona de carga
+archivo_banco = st.file_uploader("📥 Arrastra aquí cualquier extracto de Excel o CSV", type=["xlsx", "xls", "csv"])
+
+if archivo_banco:
+    try:
+        nombre_archivo = archivo_banco.name.lower()
+        
+        # Lector inteligente y controlador de trampas binarias (.xls falsos)
+        if nombre_archivo.endswith('.csv'):
+            df_raw = pd.read_csv(archivo_banco, header=None)
+        elif nombre_archivo.endswith('.xls'):
+            try:
+                df_raw = pd.read_excel(archivo_banco, header=None, engine='xlrd')
+            except Exception as e:
+                if "BOF" in str(e) or "Expected BOF record" in str(e):
+                    st.info("💡 Detectado archivo web disfrazado de Excel (Típico del BBVA). Procesando...")
+                    archivo_banco.seek(0)
+                    html_content = archivo_banco.read().decode('latin-1', errors='ignore')
+                    tablas = pd.read_html(io.StringIO(html_content))
+                    df_raw = max(tablas, key=len)
+                    
+                    df_raw.loc[-1] = df_raw.columns.tolist()
+                    df_raw.index = df_raw.index + 1
+                    df_raw = df_raw.sort_index()
+                    df_raw.columns = range(df_raw.shape[1])
+                else:
+                    raise e
+        else:
+            df_raw = pd.read_excel(archivo_banco, header=None, engine='openpyxl')
+        
+        texto_muestra = df_raw.iloc[:15].astype(str).to_string()
+        df_nuevo = None
+
+        # Ruteador Inteligente de Motores Bancarios
+        if "RUC" in texto_muestra and "Trans." in texto_muestra and "Abono" in texto_muestra:
+            st.success("🔍 **Origen Detectado:** Banco de la Nación")
+            df_nuevo = procesar_banco_nacion(df_raw, texto_muestra, COLUMNAS_MAESTRO)
+
+        elif "ccmn" in texto_muestra.lower() or "ccmd" in texto_muestra.lower() or "movimientos de cuenta" in texto_muestra.lower():
+            st.success("🔍 **Origen Detectado:** Scotiabank")
+            df_nuevo = procesar_scotiabank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
+
+        elif "Consulta de Movimientos" in texto_muestra or "Saldo contable" in texto_muestra:
+            st.success("🔍 **Origen Detectado:** Interbank")
+            df_nuevo = procesar_interbank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
+
+        elif "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
+            st.success("🔍 **Origen Detectado:** BBVA")
+            df_nuevo = procesar_bbva(df_raw, texto_muestra, COLUMNAS_MAESTRO)
+
+        elif "Descripción operación" in texto_muestra or (df_raw.shape[1] > 1 and '-' in str(df_raw.iloc[0, 1])):
+            st.success("🔍 **Origen Detectado:** BCP")
+            df_nuevo = procesar_bcp(df_raw, texto_muestra, COLUMNAS_MAESTRO)
+
+        else:
+            st.error("❌ Archivo no reconocido por el sistema.")
+
+        # Motor de Control de Duplicados integrado en el Hub Central
+        if df_nuevo is not None and not df_nuevo.empty:
+            df_nuevo = df_nuevo.dropna(subset=['Año'])
+            filas_originales = len(df_nuevo)
             
-    fechas = pd.to_datetime(df_datos['Fecha'], dayfirst=True, errors='coerce')
-    
-    df_res = pd.DataFrame(columns=columnas_maestro)
-    df_res['Año'] = fechas.dt.year
-    df_res['Mes '] = fechas.dt.month
-    df_res['Semana'] = fechas.dt.isocalendar().week
-    df_res['BANCO'] = "04.SCOTIABANK"
-    df_res['Cuenta'] = cuenta_final
-    df_res['Moneda'] = moneda
-    df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
-    df_res['Descripción operación'] = df_datos['Movimiento']
-    df_res['Monto'] = pd.to_numeric(df_datos['Importe'], errors='coerce')
-    df_res['Operación - Número'] = df_datos['Referencia'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-    return df_res
-
-def procesar_interbank(df_raw, texto_muestra, columnas_maestro):
-    idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha de operación|Saldo contable', na=False).any(), axis=1)].index[0]
-    df_datos = df_raw.iloc[idx_header+1:].copy()
-    df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
-    df_datos = df_datos[df_datos['Fecha de operación'].notna()]
-    
-    cuenta_final, moneda = "000", "01.Soles"
-    for _, row in df_raw.head(idx_header).iterrows():
-        linea = " ".join([str(val) for val in row.values])
-        if "Cuenta:" in linea:
-            solo_nums = re.sub(r'\D', '', linea)
-            cuenta_final = solo_nums[-3:] if solo_nums else "000"
-            if "USD" in linea or "DOLAR" in linea.upper():
-                moneda = "02.Dolares"
-            break
+            # Capa 1: Duplicados internos del archivo
+            df_nuevo = df_nuevo.drop_duplicates(subset=['BANCO', 'Fecha', 'Monto', 'Operación - Número'])
+            duplicados_internos = filas_originales - len(df_nuevo)
             
-    fechas = pd.to_datetime(df_datos['Fecha de operación'], dayfirst=True, errors='coerce')
-    fechas_valuta = pd.to_datetime(df_datos['Fecha de proceso'], dayfirst=True, errors='coerce')
-    monto_final = pd.to_numeric(df_datos['Abono'], errors='coerce').fillna(pd.to_numeric(df_datos['Cargo'], errors='coerce'))
-    
-    df_res = pd.DataFrame(columns=columnas_maestro)
-    df_res['Año'] = fechas.dt.year
-    df_res['Mes '] = fechas.dt.month
-    df_res['Semana'] = fechas.dt.isocalendar().week
-    df_res['BANCO'] = "03.INTERBANK"
-    df_res['Cuenta'] = cuenta_final
-    df_res['Moneda'] = moneda
-    df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
-    if not fechas_valuta.isna().all():
-        df_res['Fecha valuta'] = fechas_valuta.dt.strftime('%d/%m/%Y')
-    df_res['Descripción operation'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
-    df_res['Monto'] = monto_final
-    df_res['Saldo'] = df_datos['Saldo contable']
-    df_res['Operación - Número'] = df_datos['Nro. de operación'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-    return df_res
-
-def procesar_bbva(df_raw, texto_muestra, columnas_maestro):
-    idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('F. Operación|Concepto', na=False).any(), axis=1)].index[0]
-    df_datos = df_raw.iloc[idx_header+1:].copy()
-    df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
-    df_datos = df_datos[df_datos['F. Operación'].notna()]
-    df_datos = df_datos[df_datos['F. Operación'].astype(str).str.contains(r'\d')] 
-    
-    cuenta_final, moneda = "000", "01.Soles"
-    for _, row in df_raw.head(idx_header).iterrows():
-        linea = " ".join([str(val) for val in row.values])
-        if "Cuenta Actual:" in linea:
-            solo_nums = re.sub(r'\D', '', linea)
-            cuenta_final = solo_nums[-3:] if solo_nums else "000"
-            if "USD" in linea or "DOLARES" in linea.upper():
-                moneda = "02.Dolares"
-            break
+            duplicados_historicos = 0
+            # Capa 2: Duplicados contra la memoria histórica de la sesión
+            if not st.session_state.df_consolidado.empty:
+                historico = st.session_state.df_consolidado
+                llaves_historico = (historico['BANCO'].astype(str) + "_" + 
+                                    historico['Fecha'].astype(str) + "_" + 
+                                    historico['Monto'].astype(float).round(2).astype(str) + "_" + 
+                                    historico['Operación - Número'].astype(str))
+                
+                llaves_nuevas = (df_nuevo['BANCO'].astype(str) + "_" + 
+                                 df_nuevo['Fecha'].astype(str) + "_" + 
+                                 df_nuevo['Monto'].astype(float).round(2).astype(str) + "_" + 
+                                 df_nuevo['Operación - Número'].astype(str))
+                
+                filas_antes_filtro = len(df_nuevo)
+                df_nuevo = df_nuevo[~llaves_nuevas.isin(llaves_historico)]
+                duplicados_historicos = filas_antes_filtro - len(df_nuevo)
             
-    fechas = pd.to_datetime(df_datos['F. Operación'], dayfirst=True, errors='coerce')
-    fechas_valuta = pd.to_datetime(df_datos['F. Valor'], dayfirst=True, errors='coerce')
-    
-    df_res = pd.DataFrame(columns=columnas_maestro)
-    df_res['Año'] = fechas.dt.year
-    df_res['Mes '] = fechas.dt.month
-    df_res['Semana'] = fechas.dt.isocalendar().week
-    df_res['BANCO'] = "02.BBVA"
-    df_res['Cuenta'] = cuenta_final
-    df_res['Moneda'] = moneda
-    df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
-    df_res['Fecha valuta'] = fechas_valuta.dt.strftime('%d/%m/%Y')
-    df_res['Descripción operación'] = df_datos['Concepto']
-    df_res['Monto'] = df_datos['Importe']
-    df_res['Sucursal - agencia'] = df_datos['Oficina']
-    df_res['Operación - Número'] = df_datos['Nº. Doc.'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-    return df_res
+            if len(df_nuevo) > 0:
+                st.session_state.df_consolidado = pd.concat([st.session_state.df_consolidado, df_nuevo], ignore_index=True)
+                st.success(f"🎉 Se añadieron {len(df_nuevo)} nuevas transacciones únicas al consolidado.")
+            else:
+                st.info("ℹ️ El archivo cargado no contiene transacciones nuevas.")
+                
+            if duplicados_internos > 0 or duplicados_historicos > 0:
+                with st.expander("🔍 Ver reporte de prevención de duplicados"):
+                    if duplicados_internos > 0:
+                        st.write(f"• **{duplicados_internos}** filas repetidas dentro del mismo archivo fueron limpiadas.")
+                    if duplicados_historicos > 0:
+                        st.write(f"• **{duplicados_historicos}** transacciones se omitieron porque ya existían en tu Libro Mayor.")
 
-def procesar_bcp(df_raw, texto_muestra, columnas_maestro):
-    idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
-    df_datos = df_raw.iloc[idx_header+1:].copy()
-    df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
+    except Exception as e:
+        st.error(f"Error técnico procesando la tabla: {e}")
+
+# Despliegue de resultados y descarga
+if not st.session_state.df_consolidado.empty:
+    st.subheader("📊 Vista Previa del Libro Mayor")
+    st.dataframe(st.session_state.df_consolidado.tail(20))
     
-    cuenta_full = str(df_raw.iloc[0, 1])
-    solo_numeros = re.sub(r'\D', '', cuenta_full)
-    cuenta_final = solo_numeros[-3:] if solo_numeros else "000"
-    moneda = "01.Soles" if "Soles" in str(df_raw.iloc[1, 1]) else "02.Dolares"
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        st.session_state.df_consolidado.to_excel(writer, index=False)
     
-    fechas = pd.to_datetime(df_datos['Fecha'], dayfirst=True, errors='coerce')
-    fechas_valuta = pd.to_datetime(df_datos['Fecha valuta'], dayfirst=True, errors='coerce')
-    
-    df_res = pd.DataFrame(columns=columnas_maestro)
-    df_res['Año'] = fechas.dt.year
-    df_res['Mes '] = fechas.dt.month
-    df_res['Semana'] = fechas.dt.isocalendar().week
-    df_res['BANCO'] = "01.BCP"
-    df_res['Cuenta'] = cuenta_final
-    df_res['Moneda'] = moneda
-    df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
-    df_res['Fecha valuta'] = fechas_valuta.dt.strftime('%d/%m/%Y')
-    
-    mapeo_bcp = {
-        'Descripción operación': 'Descripción operación',
-        'Monto': 'Monto', 'Saldo': 'Saldo', 'Sucursal - agencia': 'Sucursal - agencia',
-        'Operación - Hora': 'Operación - Hora', 'Usuario': 'Usuario', 'UTC': 'UTC', 'Referencia2': 'Referencia2'
-    }
-    for c_m, c_b in mapeo_bcp.items():
-        if c_b in df_datos.columns:
-            df_res[c_m] = df_datos[c_b]
-            
-    df_res['Operación - Número'] = df_datos['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-    return df_res
+    st.download_button("💾 Descargar Libro Mayor (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
+else:
+    st.info("El sistema está listo y esperando archivos. Arrastra un extracto bancario para comenzar.")
