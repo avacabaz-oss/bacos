@@ -54,7 +54,6 @@ if archivo_banco:
         else:
             df_raw = pd.read_excel(archivo_banco, header=None, engine='openpyxl')
         
-        # Muestra de texto para escanear de qué banco es
         texto_muestra = df_raw.iloc[:15].astype(str).to_string()
         df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
 
@@ -64,19 +63,18 @@ if archivo_banco:
         if "Consulta de Movimientos" in texto_muestra or "Saldo contable" in texto_muestra:
             st.success("🔍 **Origen Detectado:** Interbank")
             
-            # Ubicar la fila donde empiezan los encabezados reales de Interbank
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha de operación|Saldo contable', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
-            df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
+            # Blindaje 1: Convertir las cabeceras a texto forzado para evitar celdas nulas (floats)
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
             
-            # Limpiar filas vacías
             df_datos = df_datos[df_datos['Fecha de operación'].notna()]
             
-            # Extraer Cuenta y Moneda de la cabecera
             cuenta_final, moneda = "000", "01.Soles"
             for _, row in df_raw.head(idx_header).iterrows():
-                linea = " ".join(row.astype(str))
+                # Blindaje 2: Forzar cada celda a texto antes de unirla, anulando el error de float
+                linea = " ".join([str(val) for val in row.values])
                 if "Cuenta:" in linea:
                     solo_nums = re.sub(r'\D', '', linea)
                     cuenta_final = solo_nums[-3:] if solo_nums else "000"
@@ -85,8 +83,6 @@ if archivo_banco:
                     break
             
             fechas = pd.to_datetime(df_datos['Fecha de operación'], dayfirst=True, errors='coerce')
-            
-            # Combinación inteligente de Cargo y Abono para la columna Monto
             monto_final = pd.to_numeric(df_datos['Abono'], errors='coerce').fillna(pd.to_numeric(df_datos['Cargo'], errors='coerce'))
             
             df_res['Año'] = fechas.dt.year
@@ -111,14 +107,14 @@ if archivo_banco:
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('F. Operación|Concepto', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
-            df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values] # Blindado
             
             df_datos = df_datos[df_datos['F. Operación'].notna()]
             df_datos = df_datos[df_datos['F. Operación'].astype(str).str.contains(r'\d')] 
             
             cuenta_final, moneda = "000", "01.Soles"
             for _, row in df_raw.head(idx_header).iterrows():
-                linea = " ".join(row.astype(str))
+                linea = " ".join([str(val) for val in row.values]) # Blindado
                 if "Cuenta Actual:" in linea:
                     solo_nums = re.sub(r'\D', '', linea)
                     cuenta_final = solo_nums[-3:] if solo_nums else "000"
@@ -149,7 +145,7 @@ if archivo_banco:
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
-            df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values] # Blindado
             
             cuenta_full = str(df_raw.iloc[0, 1])
             solo_numeros = re.sub(r'\D', '', cuenta_full)
@@ -194,7 +190,7 @@ if archivo_banco:
 # =========================================================================
 # VISTA Y DESCARGA
 # =========================================================================
-if not st.session_state.df_consolidated.empty if 'df_consolidated' in locals() else not st.session_state.df_consolidado.empty:
+if not st.session_state.df_consolidado.empty:
     st.subheader("📊 Vista Previa del Libro Mayor")
     st.dataframe(st.session_state.df_consolidado.tail(20))
     
