@@ -77,7 +77,7 @@ if archivo_banco:
             df_nuevo = procesar_interbank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
 
         elif "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
-            st.success("🔍 **Origen Detectado:** BBVA")
+            st.success("🔍 **Origen Detected:** BBVA")
             df_nuevo = procesar_bbva(df_raw, texto_muestra, COLUMNAS_MAESTRO)
 
         elif "Descripción operación" in texto_muestra or (df_raw.shape[1] > 1 and '-' in str(df_raw.iloc[0, 1])):
@@ -90,44 +90,28 @@ if archivo_banco:
         # Procesamiento y Control de Duplicados integrado en el Hub Central
         if df_nuevo is not None and not df_nuevo.empty:
             
-            # =========================================================================
-            # CLASIFICACIÓN AUTOMÁTICA DEL TIPO DE OPERACIÓN (INGRESO / EGRESO)
-            # =========================================================================
+            # Clasificación automática del tipo de operación (Ingreso / Egreso)
             df_nuevo['Monto'] = pd.to_numeric(df_nuevo['Monto'], errors='coerce').fillna(0.0)
             df_nuevo['Tipo Op'] = df_nuevo['Monto'].apply(lambda x: 'INGRESO' if x > 0 else ('EGRESO' if x < 0 else ''))
             
-            # =========================================================================
-            # CONCATENACIÓN AUTOMÁTICA Y ESTÁNDAR DE LA GLOSA MAESTRA
-            # =========================================================================
+            # Concatenación automática y estándar de la glosa maestra
             diccionario_bancos = {
-                '01.BCP': 'BCP',
-                '02.BBVA': 'BBVA',
-                '03.INTERBANK': 'ITB',
-                '04.SCOTIABANK': 'SCT',
-                '05.BN': 'BN'
+                '01.BCP': 'BCP', '02.BBVA': 'BBVA', '03.INTERBANK': 'ITB', '04.SCOTIABANK': 'SCT', '05.BN': 'BN'
             }
-            
-            # Obtener sigla resumida o mantener el nombre original si no está en el diccionario
             banco_resumido = df_nuevo['BANCO'].map(diccionario_bancos).fillna(df_nuevo['BANCO']).astype(str)
             cuenta_limpia = df_nuevo['Cuenta'].fillna('000').astype(str)
             fecha_limpia = df_nuevo['Fecha'].fillna('').astype(str)
             operacion_limpia = df_nuevo['Operación - Número'].fillna('').astype(str)
-            
-            # Unificación bajo la estructura estricta con un espacio de separación
             df_nuevo['Glosa'] = banco_resumido + " " + cuenta_limpia + " " + fecha_limpia + " " + operacion_limpia
             
-            # =========================================================================
-            # CONTROL DE DUPLICADOS (HISTÓRICO Y EN ARCHIVO)
-            # =========================================================================
+            # Control de duplicados (Histórico y en archivo)
             df_nuevo = df_nuevo.dropna(subset=['Año'])
             filas_originales = len(df_nuevo)
             
-            # Capa 1: Duplicados internos del archivo
             df_nuevo = df_nuevo.drop_duplicates(subset=['BANCO', 'Fecha', 'Monto', 'Operación - Número'])
             duplicados_internos = filas_originales - len(df_nuevo)
             
             duplicados_historicos = 0
-            # Capa 2: Duplicados contra la memoria histórica de la sesión
             if not st.session_state.df_consolidado.empty:
                 historico = st.session_state.df_consolidado
                 llaves_historico = (historico['BANCO'].astype(str) + "_" + 
@@ -160,15 +144,54 @@ if archivo_banco:
     except Exception as e:
         st.error(f"Error técnico procesando la tabla: {e}")
 
-# Despliegue de resultados y descarga
+# =========================================================================
+# DESPLIEGUE DE RESULTADOS, ESTADÍSTICAS Y DESCARGA
+# =========================================================================
 if not st.session_state.df_consolidado.empty:
-    st.subheader("📊 Vista Previa del Libro Mayor")
-    st.dataframe(st.session_state.df_consolidado.tail(20))
+    df_c = st.session_state.df_consolidado.copy()
+    df_c['Monto'] = pd.to_numeric(df_c['Monto'], errors='coerce').fillna(0.0)
+    
+    st.write("---")
+    st.subheader("📈 Cuadro de Mando del Flujo de Caja")
+    
+    # 1. Separación de datos para KPIs globales
+    ingresos_df = df_c[df_c['Tipo Op'] == 'INGRESO']
+    egresos_df = df_c[df_c['Tipo Op'] == 'EGRESO']
+    
+    sum_ingresos = ingresos_df['Monto'].sum()
+    count_ingresos = len(ingresos_df)
+    
+    sum_egresos = egresos_df['Monto'].sum()
+    count_egresos = len(egresos_df)
+    
+    saldo_neto = sum_ingresos + sum_egresos  # Los egresos ya figuran con signo negativo
+    
+    # Despliegue visual de tarjetas de control
+    kpi1, kpi2, kpi3 = st.columns(3)
+    kpi1.metric("🟢 Ingresos Totales", f"S/. {sum_ingresos:,.2f}", f"{count_ingresos} operaciones encontradas")
+    kpi2.metric("🔴 Egresos Totales", f"S/. {sum_egresos:,.2f}", f"{count_egresos} operaciones encontradas")
+    kpi3.metric("⚖️ Saldo Neto de Caja", f"S/. {saldo_neto:,.2f}", "Balance de fondos")
+    
+    # 2. Tabla resumida y colapsada de ingresos y egresos por Banco y Cuenta Corriente
+    st.markdown("### 🏦 Consolidado Estructurado por Entidad y Cuenta")
+    
+    df_resumen = df_c.groupby(['BANCO', 'Cuenta', 'Tipo Op']).agg(
+        Número_Operaciones=('Monto', 'count'),
+        Monto_Consolidado=('Monto', 'sum')
+    ).reset_index()
+    
+    # Formatear montos para su correcta visualización estética en la interfaz web
+    df_resumen['Monto_Consolidado'] = df_resumen['Monto_Consolidado'].map(lambda x: f"S/. {x:,.2f}")
+    st.dataframe(df_resumen, use_container_width=True)
+    
+    st.write("---")
+    st.subheader("📊 Vista Previa de las Últimas Líneas del Libro Mayor")
+    st.dataframe(df_c.tail(20))
     
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        st.session_state.df_consolidado.to_excel(writer, index=False)
+        df_c.to_excel(writer, index=False)
     
-    st.download_button("💾 Descargar Libro Mayor (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
+    st.download_button("💾 Descargar Libro Mayor Completo (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
 else:
     st.info("El sistema está listo y esperando archivos. Arrastra un extracto bancario para comenzar.")
