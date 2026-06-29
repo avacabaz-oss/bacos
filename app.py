@@ -15,77 +15,85 @@ COLUMNAS_MAESTRO = [
     'Tipo Op', 'ordenante'
 ]
 
-# Inicializar la base de datos histórica en la memoria de la sesión permanente
+# Inicializar la base de datos histórica
 if 'df_consolidado' not in st.session_state:
     st.session_state.df_consolidado = pd.DataFrame(columns=COLUMNAS_MAESTRO)
 
-# Botón en la barra lateral para reiniciar el histórico cuando desees empezar un nuevo periodo
 if st.sidebar.button("🧹 Limpiar Base Histórica"):
     st.session_state.df_consolidado = pd.DataFrame(columns=COLUMNAS_MAESTRO)
     st.sidebar.success("Base histórica reiniciada correctamente.")
 
-# Única zona de carga para todos los bancos (Agregado soporte .xls)
+# Única zona de carga
 archivo_banco = st.file_uploader("📥 Arrastra aquí cualquier extracto de Excel o CSV", type=["xlsx", "xls", "csv"])
 
 if archivo_banco:
     try:
-        # LECTURA CRUDA CON SELECCIÓN DE MOTOR (ENGINE) FORZADA
+        # =========================================================================
+        # LECTOR INTELIGENTE Y DETECTOR DE TRAMPAS DE FORMATO
+        # =========================================================================
         nombre_archivo = archivo_banco.name.lower()
+        
         if nombre_archivo.endswith('.csv'):
             df_raw = pd.read_csv(archivo_banco, header=None)
         elif nombre_archivo.endswith('.xls'):
-            df_raw = pd.read_excel(archivo_banco, header=None, engine='xlrd')
+            try:
+                df_raw = pd.read_excel(archivo_banco, header=None, engine='xlrd')
+            except Exception as e:
+                if "BOF" in str(e) or "Expected BOF record" in str(e):
+                    # MAGIA: Detecta el HTML disfrazado del BBVA y lo procesa
+                    st.info("💡 Detectado archivo web disfrazado de Excel (Típico del BBVA). Procesando...")
+                    archivo_banco.seek(0)
+                    html_content = archivo_banco.read().decode('latin-1', errors='ignore')
+                    tablas = pd.read_html(io.StringIO(html_content))
+                    df_raw = max(tablas, key=len) # Toma la tabla principal
+                    
+                    # Restaurar las cabeceras absorbidas para uniformizar
+                    df_raw.loc[-1] = df_raw.columns.tolist()
+                    df_raw.index = df_raw.index + 1
+                    df_raw = df_raw.sort_index()
+                    df_raw.columns = range(df_raw.shape[1])
+                else:
+                    raise e
         else:
             df_raw = pd.read_excel(archivo_banco, header=None, engine='openpyxl')
         
-        # Convertir las primeras 15 filas a un solo bloque de texto para buscar patrones
+        # Muestra de texto para escanear de qué banco es
         texto_muestra = df_raw.iloc[:15].astype(str).to_string()
-        
         df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
-        banco_detectado = None
 
         # =========================================================================
-        # DETECCIÓN Y PROCESAMIENTO DEL BBVA
+        # PROCESAMIENTO BBVA
         # =========================================================================
         if "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
-            banco_detectado = "02.BBVA"
-            st.info("🔍 **Origen Detectado:** BBVA (Procesando estructura...)")
+            st.success("🔍 **Origen Detectado:** BBVA")
             
-            # Localizar la fila donde empiezan los encabezados reales del BBVA
+            # Ubicar la tabla dentro de la matriz
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('F. Operación|Concepto', na=False).any(), axis=1)].index[0]
             
-            # Leer la tabla de datos omitiendo la cabecera del banco (Forzando el motor)
-            if nombre_archivo.endswith('.csv'):
-                df_datos = pd.read_csv(archivo_banco, skiprows=idx_header)
-            elif nombre_archivo.endswith('.xls'):
-                df_datos = pd.read_excel(archivo_banco, skiprows=idx_header, engine='xlrd')
-            else:
-                df_datos = pd.read_excel(archivo_banco, skiprows=idx_header, engine='openpyxl')
-                
-            df_datos.columns = df_datos.columns.str.strip()
+            # Cortar la matriz en memoria (Mucho más rápido)
+            df_datos = df_raw.iloc[idx_header+1:].copy()
+            df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
             
-            # FILTRO CRÍTICO: Eliminar "Filas Fantasma" de saldos intermedios del BBVA
+            # Eliminar "Filas Fantasma" de saldos
             df_datos = df_datos[df_datos['F. Operación'].notna()]
-            df_datos = df_datos[df_datos['F. Operación'].astype(str).str.contains(r'\d')] # Asegura que sea una fecha con números
+            df_datos = df_datos[df_datos['F. Operación'].astype(str).str.contains(r'\d')] 
             
-            # Extracción blindada de cuenta y moneda desde los metadatos superiores
-            cuenta_final = "000"
-            moneda = "01.Soles"
-            for _, row in df_raw.iterrows():
-                linea_texto = " ".join(row.astype(str))
-                if "Cuenta Actual:" in linea_texto:
-                    solo_nums = re.sub(r'\D', '', linea_texto)
+            # Extraer Cuenta y Moneda leyendo solo las filas de arriba
+            cuenta_final, moneda = "000", "01.Soles"
+            for _, row in df_raw.head(idx_header).iterrows():
+                linea = " ".join(row.astype(str))
+                if "Cuenta Actual:" in linea:
+                    solo_nums = re.sub(r'\D', '', linea)
                     cuenta_final = solo_nums[-3:] if solo_nums else "000"
-                    if "USD" in linea_texto or "DOLARES" in linea_texto.upper():
+                    if "USD" in linea or "DOLARES" in linea.upper():
                         moneda = "02.Dolares"
                     break
             
-            # Construcción y mapeo de columnas al maestro
             fechas = pd.to_datetime(df_datos['F. Operación'], dayfirst=True, errors='coerce')
             df_res['Año'] = fechas.dt.year
             df_res['Mes '] = fechas.dt.month
             df_res['Semana'] = fechas.dt.isocalendar().week
-            df_res['BANCO'] = banco_detectado
+            df_res['BANCO'] = "02.BBVA"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
             df_res['Fecha'] = df_datos['F. Operación']
@@ -96,25 +104,16 @@ if archivo_banco:
             df_res['Operación - Número'] = df_datos['Nº. Doc.'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
 
         # =========================================================================
-        # DETECCIÓN Y PROCESAMIENTO DEL BCP
+        # PROCESAMIENTO BCP
         # =========================================================================
         elif "Descripción operación" in texto_muestra or (df_raw.shape[1] > 1 and '-' in str(df_raw.iloc[0, 1])):
-            banco_detectado = "01.BCP"
-            st.info("🔍 **Origen Detectado:** BCP (Procesando estructura...)")
+            st.success("🔍 **Origen Detectado:** BCP")
             
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
             
-            # Forzando el motor para el BCP también
-            if nombre_archivo.endswith('.csv'):
-                df_datos = pd.read_csv(archivo_banco, skiprows=idx_header)
-            elif nombre_archivo.endswith('.xls'):
-                df_datos = pd.read_excel(archivo_banco, skiprows=idx_header, engine='xlrd')
-            else:
-                df_datos = pd.read_excel(archivo_banco, skiprows=idx_header, engine='openpyxl')
-                
-            df_datos.columns = df_datos.columns.str.strip()
+            df_datos = df_raw.iloc[idx_header+1:].copy()
+            df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
             
-            # Extracción blindada de cuenta y moneda
             cuenta_full = str(df_raw.iloc[0, 1])
             solo_numeros = re.sub(r'\D', '', cuenta_full)
             cuenta_final = solo_numeros[-3:] if solo_numeros else "000"
@@ -124,7 +123,7 @@ if archivo_banco:
             df_res['Año'] = fechas.dt.year
             df_res['Mes '] = fechas.dt.month
             df_res['Semana'] = fechas.dt.isocalendar().week
-            df_res['BANCO'] = banco_detectado
+            df_res['BANCO'] = "01.BCP"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
             df_res['Fecha'] = df_datos['Fecha']
@@ -140,40 +139,30 @@ if archivo_banco:
                     
             df_res['Operación - Número'] = df_datos['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
 
-        # =========================================================================
-        # BANCO NO RECONOCIDO
-        # =========================================================================
         else:
-            st.error("❌ Estructura de archivo no reconocida. El sistema no pudo determinar el banco de origen automáticamente.")
+            st.error("❌ Archivo no reconocido por el sistema.")
             df_res = None
 
         # =========================================================================
-        # INTEGRACIÓN EN LA BASE HISTÓRICA ACUMULADA
+        # GUARDAR EN MEMORIA
         # =========================================================================
         if df_res is not None and not df_res.empty:
-            # Eliminamos filas que hayan quedado totalmente vacías por algún error de lectura
             df_res = df_res.dropna(subset=['Año'])
             st.session_state.df_consolidado = pd.concat([st.session_state.df_consolidado, df_res], ignore_index=True)
-            st.success(f"🎉 Datos acumulados correctamente. Total en memoria: {len(st.session_state.df_consolidado)} filas.")
+            st.success(f"🎉 ¡Acumulado! Total en Libro Mayor: {len(st.session_state.df_consolidado)} filas.")
 
     except Exception as e:
-        st.error(f"Error en el procesamiento interno del archivo: {e}")
+        st.error(f"Error técnico procesando la tabla: {e}")
 
-# 4. Despliegue de Resultados y Descarga Nativa de Excel
+# =========================================================================
+# VISTA Y DESCARGA
+# =========================================================================
 if not st.session_state.df_consolidado.empty:
-    st.subheader("📊 Vista Previa del Libro Mayor Consolidado")
+    st.subheader("📊 Vista Previa del Libro Mayor")
     st.dataframe(st.session_state.df_consolidado.tail(20))
     
-    # Preparación de la salida nativa de Excel (.xlsx) usando openpyxl
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         st.session_state.df_consolidado.to_excel(writer, index=False)
     
-    st.download_button(
-        label="💾 Descargar Libro Mayor Acumulado (.xlsx)", 
-        data=output.getvalue(), 
-        file_name="Libro_Mayor_Bancario.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
-else:
-    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP o BBVA para comenzar la acumulación permanente.")
+    st.download_button("💾 Descargar Libro Mayor (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
