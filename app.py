@@ -121,3 +121,59 @@ if archivo_banco:
             moneda = "01.Soles" if "Soles" in str(df_raw.iloc[1, 1]) else "02.Dolares"
             
             fechas = pd.to_datetime(df_datos['Fecha'], dayfirst=True, errors='coerce')
+            df_res['Año'] = fechas.dt.year
+            df_res['Mes '] = fechas.dt.month
+            df_res['Semana'] = fechas.dt.isocalendar().week
+            df_res['BANCO'] = banco_detectado
+            df_res['Cuenta'] = cuenta_final
+            df_res['Moneda'] = moneda
+            df_res['Fecha'] = df_datos['Fecha']
+            
+            mapeo_bcp = {
+                'Fecha valuta': 'Fecha valuta', 'Descripción operación': 'Descripción operación',
+                'Monto': 'Monto', 'Saldo': 'Saldo', 'Sucursal - agencia': 'Sucursal - agencia',
+                'Operación - Hora': 'Operación - Hora', 'Usuario': 'Usuario', 'UTC': 'UTC', 'Referencia2': 'Referencia2'
+            }
+            for c_m, c_b in mapeo_bcp.items():
+                if c_b in df_datos.columns:
+                    df_res[c_m] = df_datos[c_b]
+                    
+            df_res['Operación - Número'] = df_datos['Operación - Número'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
+
+        # =========================================================================
+        # BANCO NO RECONOCIDO
+        # =========================================================================
+        else:
+            st.error("❌ Estructura de archivo no reconocida. El sistema no pudo determinar el banco de origen automáticamente.")
+            df_res = None
+
+        # =========================================================================
+        # INTEGRACIÓN EN LA BASE HISTÓRICA ACUMULADA
+        # =========================================================================
+        if df_res is not None and not df_res.empty:
+            # Eliminamos filas que hayan quedado totalmente vacías por algún error de lectura
+            df_res = df_res.dropna(subset=['Año'])
+            st.session_state.df_consolidado = pd.concat([st.session_state.df_consolidado, df_res], ignore_index=True)
+            st.success(f"🎉 Datos acumulados correctamente. Total en memoria: {len(st.session_state.df_consolidado)} filas.")
+
+    except Exception as e:
+        st.error(f"Error en el procesamiento interno del archivo: {e}")
+
+# 4. Despliegue de Resultados y Descarga Nativa de Excel
+if not st.session_state.df_consolidado.empty:
+    st.subheader("📊 Vista Previa del Libro Mayor Consolidado")
+    st.dataframe(st.session_state.df_consolidado.tail(20))
+    
+    # Preparación de la salida nativa de Excel (.xlsx) usando openpyxl
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        st.session_state.df_consolidado.to_excel(writer, index=False)
+    
+    st.download_button(
+        label="💾 Descargar Libro Mayor Acumulado (.xlsx)", 
+        data=output.getvalue(), 
+        file_name="Libro_Mayor_Bancario.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+else:
+    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP o BBVA para comenzar la acumulación permanente.")
