@@ -87,8 +87,15 @@ if archivo_banco:
         else:
             st.error("❌ Archivo no reconocido por el sistema.")
 
-        # Motor de Control de Duplicados integrado en el Hub Central
+        # Procesamiento y Control de Duplicados integrado en el Hub Central
         if df_nuevo is not None and not df_nuevo.empty:
+            
+            # =========================================================================
+            # CLASIFICACIÓN AUTOMÁTICA DEL TIPO DE OPERACIÓN (INGRESO / EGRESO)
+            # =========================================================================
+            df_nuevo['Monto'] = pd.to_numeric(df_nuevo['Monto'], errors='coerce').fillna(0.0)
+            df_nuevo['Tipo Op'] = df_nuevo['Monto'].apply(lambda x: 'INGRESO' if x > 0 else ('EGRESO' if x < 0 else ''))
+            
             df_nuevo = df_nuevo.dropna(subset=['Año'])
             filas_originales = len(df_nuevo)
             
