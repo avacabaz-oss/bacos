@@ -25,7 +25,7 @@ if st.sidebar.button("🧹 Limpiar Base Histórica"):
     st.sidebar.success("Base histórica reiniciada correctamente.")
 
 # Única zona de carga para todos los bancos
-archivo_banco = st.file_uploader("📥 Arrastra aquí cualquier extracto de Excel o CSV", type=["xlsx", "csv"])
+archivo_banco = st.file_uploader("📥 Arrastra aquí cualquier extracto de Excel o CSV", type=["xlsx","xls", "csv"])
 
 if archivo_banco:
     try:
