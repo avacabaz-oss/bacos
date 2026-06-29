@@ -40,14 +40,11 @@ if archivo_banco:
                 df_raw = pd.read_excel(archivo_banco, header=None, engine='xlrd')
             except Exception as e:
                 if "BOF" in str(e) or "Expected BOF record" in str(e):
-                    # MAGIA: Detecta el HTML disfrazado del BBVA y lo procesa
-                    st.info("💡 Detectado archivo web disfrazado de Excel (Típico del BBVA). Procesando...")
                     archivo_banco.seek(0)
                     html_content = archivo_banco.read().decode('latin-1', errors='ignore')
                     tablas = pd.read_html(io.StringIO(html_content))
-                    df_raw = max(tablas, key=len) # Toma la tabla principal
+                    df_raw = max(tablas, key=len)
                     
-                    # Restaurar las cabeceras absorbidas para uniformizar
                     df_raw.loc[-1] = df_raw.columns.tolist()
                     df_raw.index = df_raw.index + 1
                     df_raw = df_raw.sort_index()
@@ -62,23 +59,63 @@ if archivo_banco:
         df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
 
         # =========================================================================
-        # PROCESAMIENTO BBVA
+        # PROCESAMIENTO INTERBANK
         # =========================================================================
-        if "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
-            st.success("🔍 **Origen Detectado:** BBVA")
+        if "Consulta de Movimientos" in texto_muestra or "Saldo contable" in texto_muestra:
+            st.success("🔍 **Origen Detectado:** Interbank")
             
-            # Ubicar la tabla dentro de la matriz
-            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('F. Operación|Concepto', na=False).any(), axis=1)].index[0]
+            # Ubicar la fila donde empiezan los encabezados reales de Interbank
+            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha de operación|Saldo contable', na=False).any(), axis=1)].index[0]
             
-            # Cortar la matriz en memoria (Mucho más rápido)
             df_datos = df_raw.iloc[idx_header+1:].copy()
             df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
             
-            # Eliminar "Filas Fantasma" de saldos
+            # Limpiar filas vacías
+            df_datos = df_datos[df_datos['Fecha de operación'].notna()]
+            
+            # Extraer Cuenta y Moneda de la cabecera
+            cuenta_final, moneda = "000", "01.Soles"
+            for _, row in df_raw.head(idx_header).iterrows():
+                linea = " ".join(row.astype(str))
+                if "Cuenta:" in linea:
+                    solo_nums = re.sub(r'\D', '', linea)
+                    cuenta_final = solo_nums[-3:] if solo_nums else "000"
+                    if "USD" in linea or "DOLAR" in linea.upper():
+                        moneda = "02.Dolares"
+                    break
+            
+            fechas = pd.to_datetime(df_datos['Fecha de operación'], dayfirst=True, errors='coerce')
+            
+            # Combinación inteligente de Cargo y Abono para la columna Monto
+            monto_final = pd.to_numeric(df_datos['Abono'], errors='coerce').fillna(pd.to_numeric(df_datos['Cargo'], errors='coerce'))
+            
+            df_res['Año'] = fechas.dt.year
+            df_res['Mes '] = fechas.dt.month
+            df_res['Semana'] = fechas.dt.isocalendar().week
+            df_res['BANCO'] = "03.INTERBANK"
+            df_res['Cuenta'] = cuenta_final
+            df_res['Moneda'] = moneda
+            df_res['Fecha'] = df_datos['Fecha de operación']
+            df_res['Fecha valuta'] = df_datos['Fecha de proceso']
+            df_res['Descripción operación'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
+            df_res['Monto'] = monto_final
+            df_res['Saldo'] = df_datos['Saldo contable']
+            df_res['Operación - Número'] = df_datos['Nro. de operación'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
+
+        # =========================================================================
+        # PROCESAMIENTO BBVA
+        # =========================================================================
+        elif "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
+            st.success("🔍 **Origen Detectado:** BBVA")
+            
+            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('F. Operación|Concepto', na=False).any(), axis=1)].index[0]
+            
+            df_datos = df_raw.iloc[idx_header+1:].copy()
+            df_datos.columns = df_raw.iloc[idx_header].astype(str).str.strip().tolist()
+            
             df_datos = df_datos[df_datos['F. Operación'].notna()]
             df_datos = df_datos[df_datos['F. Operación'].astype(str).str.contains(r'\d')] 
             
-            # Extraer Cuenta y Moneda leyendo solo las filas de arriba
             cuenta_final, moneda = "000", "01.Soles"
             for _, row in df_raw.head(idx_header).iterrows():
                 linea = " ".join(row.astype(str))
@@ -157,7 +194,7 @@ if archivo_banco:
 # =========================================================================
 # VISTA Y DESCARGA
 # =========================================================================
-if not st.session_state.df_consolidado.empty:
+if not st.session_state.df_consolidated.empty if 'df_consolidated' in locals() else not st.session_state.df_consolidado.empty:
     st.subheader("📊 Vista Previa del Libro Mayor")
     st.dataframe(st.session_state.df_consolidado.tail(20))
     
@@ -166,3 +203,5 @@ if not st.session_state.df_consolidado.empty:
         st.session_state.df_consolidado.to_excel(writer, index=False)
     
     st.download_button("💾 Descargar Libro Mayor (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
+else:
+    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP, BBVA o Interbank para comenzar la acumulación permanente.")
