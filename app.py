@@ -4,7 +4,7 @@ import io
 import re
 
 st.set_page_config(layout="wide")
-st.title("Hub de Concesión Bancaria Automatizada")
+st.title("Hub de Consolidación Bancaria Automatizada")
 
 # 1. Estructura Única del Libro Mayor (Inmutable)
 COLUMNAS_MAESTRO = [
@@ -100,10 +100,13 @@ if archivo_banco:
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
             df_res['Fecha'] = fecha_limpia
-            df_res['Descripción operación'] = df_datos['Trans.'].astype(str) + " - RUC: " + df_datos['RUC'].astype(str).str.replace(r'\.0', '', regex=True)
+            
+            # ASIGNACIONES ESPECÍFICAS ACTUALIZADAS PARA EL BANCO DE LA NACIÓN
+            df_res['Descripción operación'] = df_datos['RUC'].fillna('').astype(str).str.replace(r'\.0', '', regex=True)
+            df_res['Operación - Número'] = df_datos['Documento'].fillna('').astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
+            
             df_res['Monto'] = monto_final
             df_res['Sucursal - agencia'] = df_datos['Oficina'].astype(str).str.replace(r'\.0', '', regex=True)
-            df_res['Operación - Número'] = df_datos['Documento'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
 
         # =========================================================================
         # PROCESAMIENTO SCOTIABANK
