@@ -4,7 +4,7 @@ import io
 import re
 
 st.set_page_config(layout="wide")
-st.title("Hub de Consolidación Bancaria Automatizada")
+st.title("Hub de Concesión Bancaria Automatizada")
 
 # 1. Estructura Única del Libro Mayor (Inmutable)
 COLUMNAS_MAESTRO = [
@@ -58,21 +58,65 @@ if archivo_banco:
         df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
 
         # =========================================================================
-        # PROCESAMIENTO SCOTIABANK
+        # PROCESAMIENTO BANCO DE LA NACIÓN
         # =========================================================================
-        if "ccmn" in texto_muestra.lower() or "ccmd" in texto_muestra.lower() or "movimientos de cuenta" in texto_muestra.lower():
-            st.success("🔍 **Origen Detectado:** Scotiabank")
+        if "RUC" in texto_muestra and "Trans." in texto_muestra and "Abono" in texto_muestra:
+            st.success("🔍 **Origen Detectado:** Banco de la Nación")
             
-            # Ubicar fila de encabezados reales buscando la combinación de columnas clave
-            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any() and r.astype(str).str.contains('Movimiento', na=False).any(), axis=1)].index[0]
+            # Localizar fila de encabezados reales
+            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Trans\.|Abono', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
             df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
             
-            # Limpiar filas vacías de transacciones
             df_datos = df_datos[df_datos['Fecha'].notna()]
             
-            # Determinar cuenta y moneda desde la cabecera superior
+            # Asignación de cuenta por defecto configurada a 897
+            cuenta_final = "897"
+            moneda = "01.Soles"
+            
+            # Normalización de fechas del formato AAAA.MM.DD
+            fecha_limpia = df_datos['Fecha'].astype(str).str.replace('.', '-', regex=False).str.strip()
+            fechas = pd.to_datetime(fecha_limpia, format='%Y-%m-%d', errors='coerce')
+            
+            # Función limpiadora de texto numérico con comas de miles
+            def transformar_monto(val):
+                val_str = str(val).replace(',', '').strip()
+                if val_str == '' or val_str.lower() == 'nan':
+                    return 0.0
+                try:
+                    return float(val_str)
+                except:
+                    return 0.0
+            
+            abonos = df_datos['Abono'].apply(transformar_monto)
+            cargos = df_datos['Cargo'].apply(transformar_monto)
+            monto_final = abonos.where(abonos != 0, -cargos)
+            
+            df_res['Año'] = fechas.dt.year
+            df_res['Mes '] = fechas.dt.month
+            df_res['Semana'] = fechas.dt.isocalendar().week
+            df_res['BANCO'] = "05.BN"
+            df_res['Cuenta'] = cuenta_final
+            df_res['Moneda'] = moneda
+            df_res['Fecha'] = fecha_limpia
+            df_res['Descripción operación'] = df_datos['Trans.'].astype(str) + " - RUC: " + df_datos['RUC'].astype(str).str.replace(r'\.0', '', regex=True)
+            df_res['Monto'] = monto_final
+            df_res['Sucursal - agencia'] = df_datos['Oficina'].astype(str).str.replace(r'\.0', '', regex=True)
+            df_res['Operación - Número'] = df_datos['Documento'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
+
+        # =========================================================================
+        # PROCESAMIENTO SCOTIABANK
+        # =========================================================================
+        elif "ccmn" in texto_muestra.lower() or "ccmd" in texto_muestra.lower() or "movimientos de cuenta" in texto_muestra.lower():
+            st.success("🔍 **Origen Detectado:** Scotiabank")
+            
+            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any() and r.astype(str).str.contains('Movimiento', na=False).any(), axis=1)].index[0]
+            
+            df_datos = df_raw.iloc[idx_header+1:].copy()
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
+            df_datos = df_datos[df_datos['Fecha'].notna()]
+            
             cuenta_final, moneda = "000", "01.Soles"
             for _, row in df_raw.head(idx_header).iterrows():
                 linea = " ".join([str(val) for val in row.values])
@@ -129,7 +173,7 @@ if archivo_banco:
             df_res['Moneda'] = moneda
             df_res['Fecha'] = df_datos['Fecha de operación']
             df_res['Fecha valuta'] = df_datos['Fecha de proceso']
-            df_res['Descripción operation'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
+            df_res['Descripción operación'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
             df_res['Monto'] = monto_final
             df_res['Saldo'] = df_datos['Saldo contable']
             df_res['Operación - Número'] = df_datos['Nro. de operación'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
@@ -236,4 +280,4 @@ if not st.session_state.df_consolidado.empty:
     
     st.download_button("💾 Descargar Libro Mayor (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
 else:
-    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP, BBVA, Interbank o Scotiabank para comenzar.")
+    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP, BBVA, Interbank, Scotiabank o Banco de la Nación para comenzar.")
