@@ -71,15 +71,12 @@ if archivo_banco:
             
             df_datos = df_datos[df_datos['Fecha'].notna()]
             
-            # Asignación de cuenta por defecto configurada a 897
             cuenta_final = "897"
             moneda = "01.Soles"
             
-            # Normalización de fechas del formato AAAA.MM.DD
             fecha_limpia = df_datos['Fecha'].astype(str).str.replace('.', '-', regex=False).str.strip()
             fechas = pd.to_datetime(fecha_limpia, format='%Y-%m-%d', errors='coerce')
             
-            # Función limpiadora de texto numérico con comas de miles
             def transformar_monto(val):
                 val_str = str(val).replace(',', '').strip()
                 if val_str == '' or val_str.lower() == 'nan':
@@ -99,12 +96,12 @@ if archivo_banco:
             df_res['BANCO'] = "05.BN"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
-            df_res['Fecha'] = fecha_limpia
             
-            # ASIGNACIONES ESPECÍFICAS ACTUALIZADAS PARA EL BANCO DE LA NACIÓN
+            # ESTANDARIZACIÓN ESTRICTA DE FECHA (Día/Mes/Año)
+            df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
+            
             df_res['Descripción operación'] = df_datos['RUC'].fillna('').astype(str).str.replace(r'\.0', '', regex=True)
             df_res['Operación - Número'] = df_datos['Documento'].fillna('').astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
-            
             df_res['Monto'] = monto_final
             df_res['Sucursal - agencia'] = df_datos['Oficina'].astype(str).str.replace(r'\.0', '', regex=True)
 
@@ -138,7 +135,10 @@ if archivo_banco:
             df_res['BANCO'] = "04.SCOTIABANK"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
-            df_res['Fecha'] = df_datos['Fecha']
+            
+            # ESTANDARIZACIÓN ESTRICTA DE FECHA (Día/Mes/Año)
+            df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
+            
             df_res['Descripción operación'] = df_datos['Movimiento']
             df_res['Monto'] = pd.to_numeric(df_datos['Importe'], errors='coerce')
             df_res['Operación - Número'] = df_datos['Referencia'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
@@ -166,6 +166,7 @@ if archivo_banco:
                     break
             
             fechas = pd.to_datetime(df_datos['Fecha de operación'], dayfirst=True, errors='coerce')
+            fechas_valuta = pd.to_datetime(df_datos['Fecha de proceso'], dayfirst=True, errors='coerce')
             monto_final = pd.to_numeric(df_datos['Abono'], errors='coerce').fillna(pd.to_numeric(df_datos['Cargo'], errors='coerce'))
             
             df_res['Año'] = fechas.dt.year
@@ -174,8 +175,11 @@ if archivo_banco:
             df_res['BANCO'] = "03.INTERBANK"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
-            df_res['Fecha'] = df_datos['Fecha de operación']
-            df_res['Fecha valuta'] = df_datos['Fecha de proceso']
+            
+            # ESTANDARIZACIÓN ESTRICTA DE FECHA (Día/Mes/Año)
+            df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
+            df_res['Fecha valuta'] = fechas_valuta.dt.strftime('%d/%m/%Y')
+            
             df_res['Descripción operación'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
             df_res['Monto'] = monto_final
             df_res['Saldo'] = df_datos['Saldo contable']
@@ -206,14 +210,19 @@ if archivo_banco:
                     break
             
             fechas = pd.to_datetime(df_datos['F. Operación'], dayfirst=True, errors='coerce')
+            fechas_valuta = pd.to_datetime(df_datos['F. Valor'], dayfirst=True, errors='coerce')
+            
             df_res['Año'] = fechas.dt.year
             df_res['Mes '] = fechas.dt.month
             df_res['Semana'] = fechas.dt.isocalendar().week
             df_res['BANCO'] = "02.BBVA"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
-            df_res['Fecha'] = df_datos['F. Operación']
-            df_res['Fecha valuta'] = df_datos['F. Valor']
+            
+            # ESTANDARIZACIÓN ESTRICTA DE FECHA (Día/Mes/Año)
+            df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
+            df_res['Fecha valuta'] = fechas_valuta.dt.strftime('%d/%m/%Y')
+            
             df_res['Descripción operación'] = df_datos['Concepto']
             df_res['Monto'] = df_datos['Importe']
             df_res['Sucursal - agencia'] = df_datos['Oficina']
@@ -236,16 +245,21 @@ if archivo_banco:
             moneda = "01.Soles" if "Soles" in str(df_raw.iloc[1, 1]) else "02.Dolares"
             
             fechas = pd.to_datetime(df_datos['Fecha'], dayfirst=True, errors='coerce')
+            fechas_valuta = pd.to_datetime(df_datos['Fecha valuta'], dayfirst=True, errors='coerce')
+            
             df_res['Año'] = fechas.dt.year
             df_res['Mes '] = fechas.dt.month
             df_res['Semana'] = fechas.dt.isocalendar().week
             df_res['BANCO'] = "01.BCP"
             df_res['Cuenta'] = cuenta_final
             df_res['Moneda'] = moneda
-            df_res['Fecha'] = df_datos['Fecha']
+            
+            # ESTANDARIZACIÓN ESTRICTA DE FECHA (Día/Mes/Año)
+            df_res['Fecha'] = fechas.dt.strftime('%d/%m/%Y')
+            df_res['Fecha valuta'] = fechas_valuta.dt.strftime('%d/%m/%Y')
             
             mapeo_bcp = {
-                'Fecha valuta': 'Fecha valuta', 'Descripción operación': 'Descripción operación',
+                'Descripción operación': 'Descripción operación',
                 'Monto': 'Monto', 'Saldo': 'Saldo', 'Sucursal - agencia': 'Sucursal - agencia',
                 'Operación - Hora': 'Operación - Hora', 'Usuario': 'Usuario', 'UTC': 'UTC', 'Referencia2': 'Referencia2'
             }
