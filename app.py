@@ -58,22 +58,58 @@ if archivo_banco:
         df_res = pd.DataFrame(columns=COLUMNAS_MAESTRO)
 
         # =========================================================================
+        # PROCESAMIENTO SCOTIABANK
+        # =========================================================================
+        if "ccmn" in texto_muestra.lower() or "ccmd" in texto_muestra.lower() or "movimientos de cuenta" in texto_muestra.lower():
+            st.success("🔍 **Origen Detectado:** Scotiabank")
+            
+            # Ubicar fila de encabezados reales buscando la combinación de columnas clave
+            idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any() and r.astype(str).str.contains('Movimiento', na=False).any(), axis=1)].index[0]
+            
+            df_datos = df_raw.iloc[idx_header+1:].copy()
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
+            
+            # Limpiar filas vacías de transacciones
+            df_datos = df_datos[df_datos['Fecha'].notna()]
+            
+            # Determinar cuenta y moneda desde la cabecera superior
+            cuenta_final, moneda = "000", "01.Soles"
+            for _, row in df_raw.head(idx_header).iterrows():
+                linea = " ".join([str(val) for val in row.values])
+                if "cuenta" in linea.lower() or "ccmn" in linea.lower() or "ccmd" in linea.lower():
+                    solo_nums = re.sub(r'\D', '', linea)
+                    cuenta_final = solo_nums[-3:] if solo_nums else "000"
+                    if "ccmd" in linea.lower() or "usd" in linea.lower() or "dolares" in linea.upper():
+                        moneda = "02.Dolares"
+                    break
+            
+            fechas = pd.to_datetime(df_datos['Fecha'], dayfirst=True, errors='coerce')
+            
+            df_res['Año'] = fechas.dt.year
+            df_res['Mes '] = fechas.dt.month
+            df_res['Semana'] = fechas.dt.isocalendar().week
+            df_res['BANCO'] = "04.SCOTIABANK"
+            df_res['Cuenta'] = cuenta_final
+            df_res['Moneda'] = moneda
+            df_res['Fecha'] = df_datos['Fecha']
+            df_res['Descripción operación'] = df_datos['Movimiento']
+            df_res['Monto'] = pd.to_numeric(df_datos['Importe'], errors='coerce')
+            df_res['Operación - Número'] = df_datos['Referencia'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
+
+        # =========================================================================
         # PROCESAMIENTO INTERBANK
         # =========================================================================
-        if "Consulta de Movimientos" in texto_muestra or "Saldo contable" in texto_muestra:
+        elif "Consulta de Movimientos" in texto_muestra or "Saldo contable" in texto_muestra:
             st.success("🔍 **Origen Detectado:** Interbank")
             
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha de operación|Saldo contable', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
-            # Blindaje 1: Convertir las cabeceras a texto forzado para evitar celdas nulas (floats)
             df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
-            
             df_datos = df_datos[df_datos['Fecha de operación'].notna()]
             
             cuenta_final, moneda = "000", "01.Soles"
             for _, row in df_raw.head(idx_header).iterrows():
-                # Blindaje 2: Forzar cada celda a texto antes de unirla, anulando el error de float
                 linea = " ".join([str(val) for val in row.values])
                 if "Cuenta:" in linea:
                     solo_nums = re.sub(r'\D', '', linea)
@@ -93,7 +129,7 @@ if archivo_banco:
             df_res['Moneda'] = moneda
             df_res['Fecha'] = df_datos['Fecha de operación']
             df_res['Fecha valuta'] = df_datos['Fecha de proceso']
-            df_res['Descripción operación'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
+            df_res['Descripción operation'] = df_datos['Movimiento'].astype(str) + " - " + df_datos['Descripción'].astype(str)
             df_res['Monto'] = monto_final
             df_res['Saldo'] = df_datos['Saldo contable']
             df_res['Operación - Número'] = df_datos['Nro. de operación'].astype(str).str.replace(r'\.0', '', regex=True).str.zfill(8)
@@ -107,14 +143,14 @@ if archivo_banco:
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('F. Operación|Concepto', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
-            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values] # Blindado
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
             
             df_datos = df_datos[df_datos['F. Operación'].notna()]
             df_datos = df_datos[df_datos['F. Operación'].astype(str).str.contains(r'\d')] 
             
             cuenta_final, moneda = "000", "01.Soles"
             for _, row in df_raw.head(idx_header).iterrows():
-                linea = " ".join([str(val) for val in row.values]) # Blindado
+                linea = " ".join([str(val) for val in row.values])
                 if "Cuenta Actual:" in linea:
                     solo_nums = re.sub(r'\D', '', linea)
                     cuenta_final = solo_nums[-3:] if solo_nums else "000"
@@ -145,7 +181,7 @@ if archivo_banco:
             idx_header = df_raw[df_raw.apply(lambda r: r.astype(str).str.contains('Fecha', na=False).any(), axis=1)].index[0]
             
             df_datos = df_raw.iloc[idx_header+1:].copy()
-            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values] # Blindado
+            df_datos.columns = [str(c).strip() for c in df_raw.iloc[idx_header].values]
             
             cuenta_full = str(df_raw.iloc[0, 1])
             solo_numeros = re.sub(r'\D', '', cuenta_full)
@@ -200,4 +236,4 @@ if not st.session_state.df_consolidado.empty:
     
     st.download_button("💾 Descargar Libro Mayor (.xlsx)", output.getvalue(), "Libro_Mayor.xlsx")
 else:
-    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP, BBVA o Interbank para comenzar la acumulación permanente.")
+    st.info("El sistema está listo y esperando archivos. Arrastra un extracto del BCP, BBVA, Interbank o Scotiabank para comenzar.")
