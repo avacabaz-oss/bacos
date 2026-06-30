@@ -23,7 +23,8 @@ def procesar_banco_nacion(df_raw, texto_muestra, columnas_maestro):
             return 0.0
     
     abonos = df_datos['Abono'].apply(transformar_monto)
-    cargos = df_datos['Cargo'].apply(transformar_monto)
+    # BLINDAJE: Se aplica .abs() para neutralizar el signo negativo que ya viene de origen en el CSV
+    cargos = df_datos['Cargo'].apply(transformar_monto).abs()
     monto_final = abonos.where(abonos != 0, -cargos)
     
     df_res = pd.DataFrame(columns=columnas_maestro)
