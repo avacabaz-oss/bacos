@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import io
 import re
-from streamlit_gsheets import GSheetsConnection
 from motores_bancarios import (
     procesar_banco_nacion,
     procesar_scotiabank,
@@ -23,32 +22,13 @@ COLUMNAS_MAESTRO = [
     'Tipo Op', 'ordenante'
 ]
 
-# =========================================================================
-# CONEXIÓN EN TIEMPO REAL CON GOOGLE SHEETS
-# =========================================================================
-# Inicializa el conector usando las credenciales seguras de Streamlit Secrets
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Inicializar la base de datos histórica en la memoria volátil de la sesión
+if 'df_consolidado' not in st.session_state:
+    st.session_state.df_consolidado = pd.DataFrame(columns=COLUMNAS_MAESTRO)
 
-# Intentar leer la base histórica guardada en la nube (Hoja principal)
-try:
-    # ttl=0 fuerza al sistema a leer datos frescos sin usar memoria caché
-    df_historico_cloud = conn.read(worksheet="LibroMayor", ttl=0)
-    # Asegurar que las columnas del archivo descargado correspondan al maestro
-    df_historico_cloud = pd.DataFrame(df_historico_cloud, columns=COLUMNAS_MAESTRO)
-except Exception:
-    # Si la hoja está vacía o es la primera vez, inicializa un DataFrame limpio
-    df_historico_cloud = pd.DataFrame(columns=COLUMNAS_MAESTRO)
-
-# Guardar en el estado de la sesión para compatibilidad del flujo visual
-st.session_state.df_consolidado = df_historico_cloud
-
-# Botón de limpieza total (Vacía la hoja de Google Sheets por completo)
-if st.sidebar.button("🧹 Limpiar Base Histórica en la Nube"):
-    df_vacio = pd.DataFrame(columns=COLUMNAS_MAESTRO)
-    conn.update(worksheet="LibroMayor", data=df_vacio)
-    st.session_state.df_consolidado = df_vacio
-    st.sidebar.success("¡Base histórica en Google Sheets vaciada con éxito!")
-    st.rerun()
+if st.sidebar.button("🧹 Limpiar Base Histórica"):
+    st.session_state.df_consolidado = pd.DataFrame(columns=COLUMNAS_MAESTRO)
+    st.sidebar.success("Base histórica reiniciada correctamente.")
 
 # Única zona de carga
 archivo_banco = st.file_uploader("📥 Arrastra aquí cualquier extracto de Excel o CSV", type=["xlsx", "xls", "csv"])
@@ -57,7 +37,7 @@ if archivo_banco:
     try:
         nombre_archivo = archivo_banco.name.lower()
         
-        # LECTOR INTELIGENTE CON REJILLA ANCHA
+        # Lector inteligente con rejilla ancha y tolerancia de codificación
         if nombre_archivo.endswith('.csv'):
             try:
                 df_raw = pd.read_csv(archivo_banco, header=None, encoding='utf-8', names=range(50))
@@ -87,7 +67,7 @@ if archivo_banco:
         texto_muestra = df_raw.iloc[:15].astype(str).to_string()
         df_nuevo = None
 
-        # RUTEADOR INTELIGENTE
+        # Ruteador Inteligente con orden de prioridad corregido
         if "RUC" in texto_muestra and "Trans." in texto_muestra and "Abono" in texto_muestra:
             st.success("🔍 **Origen Detectado:** Banco de la Nación")
             df_nuevo = procesar_banco_nacion(df_raw, texto_muestra, COLUMNAS_MAESTRO)
@@ -111,12 +91,14 @@ if archivo_banco:
         else:
             st.error("❌ Archivo no reconocido por el sistema.")
 
-        # PROCESAMIENTO CENTRALIZADO Y DUPLICADOS
+        # Procesamiento unificado post-extracción
         if df_nuevo is not None and not df_nuevo.empty:
             
+            # Clasificación automática Tipo Op
             df_nuevo['Monto'] = pd.to_numeric(df_nuevo['Monto'], errors='coerce').fillna(0.0)
             df_nuevo['Tipo Op'] = df_nuevo['Monto'].apply(lambda x: 'INGRESO' if x > 0 else ('EGRESO' if x < 0 else ''))
             
+            # Construcción estandarizada de la Glosa
             diccionario_bancos = {
                 '01.BCP': 'BCP', '02.BBVA': 'BBVA', '03.INTERBANK': 'ITB', '04.SCOTIABANK': 'SCT', '05.BN': 'BN'
             }
@@ -126,10 +108,10 @@ if archivo_banco:
             operacion_limpia = df_nuevo['Operación - Número'].fillna('').astype(str)
             df_nuevo['Glosa'] = banco_resumido + " " + cuenta_limpia + " " + fecha_limpia + " " + operacion_limpia
             
+            # Control de duplicados en dos capas (Interno e Histórico de sesión)
             df_nuevo = df_nuevo.dropna(subset=['Año'])
             filas_originales = len(df_nuevo)
             
-            # FILTRO DE DUPLICADOS CONTRA LA NUBE DE GOOGLE
             df_nuevo = df_nuevo.drop_duplicates(subset=['BANCO', 'Fecha', 'Monto', 'Operación - Número'])
             duplicados_internos = filas_originales - len(df_nuevo)
             
@@ -151,41 +133,35 @@ if archivo_banco:
                 duplicados_historicos = filas_antes_filtro - len(df_nuevo)
             
             if len(df_nuevo) > 0:
-                # Unificar el histórico recuperado de la nube con las filas nuevas únicas
-                consolidado_actualizado = pd.concat([st.session_state.df_consolidado, df_nuevo], ignore_index=True)
-                
-                # INYECCIÓN AUTOMÁTICA EN GOOGLE SHEETS
-                conn.update(worksheet="LibroMayor", data=consolidado_actualizado)
-                st.session_state.df_consolidado = consolidado_actualizado
-                
-                st.success(f"🎉 ¡Sincronizado con Google Sheets! Se añadieron {len(df_nuevo)} transacciones nuevas.")
+                st.session_state.df_consolidado = pd.concat([st.session_state.df_consolidado, df_nuevo], ignore_index=True)
+                st.success(f"🎉 Se añadieron {len(df_nuevo)} nuevas transacciones únicas al consolidado.")
             else:
-                st.info("ℹ️ El archivo cargado no contiene transacciones nuevas.")
+                st.info("ℹ️ El archivo cargado no contiene transacciones nuevas para esta sesión.")
                 
             if duplicados_internos > 0 or duplicados_historicos > 0:
                 with st.expander("🔍 Ver reporte de prevención de duplicados"):
                     if duplicados_internos > 0:
                         st.write(f"• **{duplicados_internos}** filas repetidas dentro del mismo archivo fueron limpiadas.")
                     if duplicados_historicos > 0:
-                        st.write(f"• **{duplicados_historicos}** transacciones se omitieron porque ya existían en tu Google Sheet.")
+                        st.write(f"• **{duplicados_historicos}** transacciones se omitieron porque ya las habías subido en esta sesión.")
 
     except Exception as e:
         st.error(f"Error técnico procesando la tabla: {e}")
 
 # =========================================================================
-# DESPLIEGUE DE RESULTADOS, METRICAS BI-MONEDA Y DESCARGA
+# DESPLIEGUE DEL DASHBOARD BI-MONEDA Y VISTA PREVIA
 # =========================================================================
 if not st.session_state.df_consolidado.empty:
     df_c = st.session_state.df_consolidado.copy()
     df_c['Monto'] = pd.to_numeric(df_c['Monto'], errors='coerce').fillna(0.0)
     
     st.write("---")
-    st.subheader("📈 Cuadro de Mando del Flujo de Caja (Datos en la Nube)")
+    st.subheader("📈 Cuadro de Mando del Flujo de Caja")
     
     df_soles = df_c[df_c['Moneda'].astype(str).str.contains('Soles', case=False, na=False)]
     df_dolares = df_c[df_c['Moneda'].astype(str).str.contains('Dolares|USD', case=False, na=False)]
     
-    # SOLES
+    # KPIs SOLES
     if not df_soles.empty:
         ing_soles = df_soles[df_soles['Tipo Op'] == 'INGRESO']
         egr_soles = df_soles[df_soles['Tipo Op'] == 'EGRESO']
@@ -199,7 +175,7 @@ if not st.session_state.df_consolidado.empty:
         kpi2.metric("🔴 Egresos Soles", f"S/. {sum_egr_soles:,.2f}", f"{len(egr_soles)} op.")
         kpi3.metric("⚖️ Balance Soles", f"S/. {neto_soles:,.2f}")
     
-    # DÓLARES
+    # KPIs DÓLARES
     if not df_dolares.empty:
         ing_usd = df_dolares[df_dolares['Tipo Op'] == 'INGRESO']
         egr_usd = df_dolares[df_dolares['Tipo Op'] == 'EGRESO']
@@ -213,6 +189,7 @@ if not st.session_state.df_consolidado.empty:
         kpi5.metric("🔴 Egresos Dólares", f"$ {sum_egr_usd:,.2f}", f"{len(egr_usd)} op.")
         kpi6.metric("⚖️ Balance Dólares", f"$ {neto_usd:,.2f}")
     
+    # Tabla resumen colapsada
     st.write("---")
     st.markdown("### 🏦 Consolidado Estructurado por Entidad y Cuenta")
     
