@@ -42,8 +42,6 @@ if archivo_banco:
         # =========================================================================
         if nombre_archivo.endswith('.csv'):
             try:
-                # Se añade 'names=range(50)' para simular una matriz ancha estilo Excel.
-                # Esto evita que colapse si las filas iniciales de metadatos tienen menos columnas que las transacciones.
                 df_raw = pd.read_csv(archivo_banco, header=None, encoding='utf-8', names=range(50))
             except UnicodeDecodeError:
                 archivo_banco.seek(0)
@@ -71,18 +69,21 @@ if archivo_banco:
         texto_muestra = df_raw.iloc[:15].astype(str).to_string()
         df_nuevo = None
 
-        # Ruteador Inteligente de Motores Bancarios
+        # =========================================================================
+        # RUTEADOR INTELIGENTE (ORDEN CORREGIDO PARA EVITAR FALSOS POSITIVOS)
+        # =========================================================================
         if "RUC" in texto_muestra and "Trans." in texto_muestra and "Abono" in texto_muestra:
             st.success("🔍 **Origen Detectado:** Banco de la Nación")
             df_nuevo = procesar_banco_nacion(df_raw, texto_muestra, COLUMNAS_MAESTRO)
 
-        elif "ccmn" in texto_muestra.lower() or "ccmd" in texto_muestra.lower() or "movimientos de cuenta" in texto_muestra.lower():
-            st.success("🔍 **Origen Detectado:** Scotiabank")
-            df_nuevo = procesar_scotiabank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
-
+        # INTERBANK AHORA SE EVALÚA ANTES QUE SCOTIABANK
         elif "Consulta de Movimientos" in texto_muestra or "Saldo contable" in texto_muestra:
             st.success("🔍 **Origen Detectado:** Interbank")
             df_nuevo = procesar_interbank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
+
+        elif "ccmn" in texto_muestra.lower() or "ccmd" in texto_muestra.lower() or "movimientos de cuenta" in texto_muestra.lower():
+            st.success("🔍 **Origen Detectado:** Scotiabank")
+            df_nuevo = procesar_scotiabank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
 
         elif "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
             st.success("🔍 **Origen Detectado:** BBVA")
@@ -95,7 +96,9 @@ if archivo_banco:
         else:
             st.error("❌ Archivo no reconocido por el sistema.")
 
-        # Procesamiento y Control de Duplicados integrado en el Hub Central
+        # =========================================================================
+        # PROCESAMIENTO CENTRALIZADO Y DUPLICADOS
+        # =========================================================================
         if df_nuevo is not None and not df_nuevo.empty:
             
             # Clasificación automática del tipo de operación (Ingreso / Egreso)
@@ -112,7 +115,7 @@ if archivo_banco:
             operacion_limpia = df_nuevo['Operación - Número'].fillna('').astype(str)
             df_nuevo['Glosa'] = banco_resumido + " " + cuenta_limpia + " " + fecha_limpia + " " + operacion_limpia
             
-            # Control de duplicados (Histórico y en archivo)
+            # Control de duplicados
             df_nuevo = df_nuevo.dropna(subset=['Año'])
             filas_originales = len(df_nuevo)
             
