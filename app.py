@@ -77,7 +77,7 @@ if archivo_banco:
             df_nuevo = procesar_interbank(df_raw, texto_muestra, COLUMNAS_MAESTRO)
 
         elif "Cuenta Actual:" in texto_muestra or "Histórico de Movimientos" in texto_muestra:
-            st.success("🔍 **Origen Detected:** BBVA")
+            st.success("🔍 **Origen Detectado:** BBVA")
             df_nuevo = procesar_bbva(df_raw, texto_muestra, COLUMNAS_MAESTRO)
 
         elif "Descripción operación" in texto_muestra or (df_raw.shape[1] > 1 and '-' in str(df_raw.iloc[0, 1])):
@@ -145,7 +145,7 @@ if archivo_banco:
         st.error(f"Error técnico procesando la tabla: {e}")
 
 # =========================================================================
-# DESPLIEGUE DE RESULTADOS, ESTADÍSTICAS Y DESCARGA
+# DESPLIEGUE DE RESULTADOS, METRICAS BI-MONEDA Y DESCARGA
 # =========================================================================
 if not st.session_state.df_consolidado.empty:
     df_c = st.session_state.df_consolidado.copy()
@@ -154,34 +154,53 @@ if not st.session_state.df_consolidado.empty:
     st.write("---")
     st.subheader("📈 Cuadro de Mando del Flujo de Caja")
     
-    # 1. Separación de datos para KPIs globales
-    ingresos_df = df_c[df_c['Tipo Op'] == 'INGRESO']
-    egresos_df = df_c[df_c['Tipo Op'] == 'EGRESO']
+    # Separación estricta por tipo de moneda
+    df_soles = df_c[df_c['Moneda'].astype(str).str.contains('Soles', case=False, na=False)]
+    df_dolares = df_c[df_c['Moneda'].astype(str).str.contains('Dolares|USD', case=False, na=False)]
     
-    sum_ingresos = ingresos_df['Monto'].sum()
-    count_ingresos = len(ingresos_df)
+    # --- SECCIÓN SOLES ---
+    ing_soles = df_soles[df_soles['Tipo Op'] == 'INGRESO']
+    egr_soles = df_soles[df_soles['Tipo Op'] == 'EGRESO']
+    sum_ing_soles = ing_soles['Monto'].sum()
+    sum_egr_soles = egr_soles['Monto'].sum()
+    neto_soles = sum_ing_soles + sum_egr_soles
     
-    sum_egresos = egresos_df['Monto'].sum()
-    count_egresos = len(egresos_df)
-    
-    saldo_neto = sum_ingresos + sum_egresos  # Los egresos ya figuran con signo negativo
-    
-    # Despliegue visual de tarjetas de control
+    st.markdown("#### 🇵🇪 Flujo de Caja en Soles (PEN)")
     kpi1, kpi2, kpi3 = st.columns(3)
-    kpi1.metric("🟢 Ingresos Totales", f"S/. {sum_ingresos:,.2f}", f"{count_ingresos} operaciones encontradas")
-    kpi2.metric("🔴 Egresos Totales", f"S/. {sum_egresos:,.2f}", f"{count_egresos} operaciones encontradas")
-    kpi3.metric("⚖️ Saldo Neto de Caja", f"S/. {saldo_neto:,.2f}", "Balance de fondos")
+    kpi1.metric("🟢 Ingresos Soles", f"S/. {sum_ing_soles:,.2f}", f"{len(ing_soles)} op.")
+    kpi2.metric("🔴 Egresos Soles", f"S/. {sum_egr_soles:,.2f}", f"{len(egr_soles)} op.")
+    kpi3.metric("⚖️ Balance Soles", f"S/. {neto_soles:,.2f}")
     
-    # 2. Tabla resumida y colapsada de ingresos y egresos por Banco y Cuenta Corriente
+    # --- SECCIÓN DÓLARES ---
+    ing_usd = df_dolares[df_dolares['Tipo Op'] == 'INGRESO']
+    egr_usd = df_dolares[df_dolares['Tipo Op'] == 'EGRESO']
+    sum_ing_usd = ing_usd['Monto'].sum()
+    sum_egr_usd = egr_usd['Monto'].sum()
+    neto_usd = sum_ing_usd + sum_egr_usd
+    
+    st.markdown("#### 🇺🇸 Flujo de Caja en Dólares (USD)")
+    kpi4, kpi5, kpi6 = st.columns(3)
+    kpi4.metric("🟢 Ingresos Dólares", f"$ {sum_ing_usd:,.2f}", f"{len(ing_usd)} op.")
+    kpi5.metric("🔴 Egresos Dólares", f"$ {sum_egr_usd:,.2f}", f"{len(egr_usd)} op.")
+    kpi6.metric("⚖️ Balance Dólares", f"$ {neto_usd:,.2f}")
+    
+    # --- TABLA ESTRUCTURADA POR ENTIEDAD, CUENTA Y MONEDA ---
+    st.write("---")
     st.markdown("### 🏦 Consolidado Estructurado por Entidad y Cuenta")
     
-    df_resumen = df_c.groupby(['BANCO', 'Cuenta', 'Tipo Op']).agg(
+    df_resumen = df_c.groupby(['BANCO', 'Cuenta', 'Moneda', 'Tipo Op']).agg(
         Número_Operaciones=('Monto', 'count'),
         Monto_Consolidado=('Monto', 'sum')
     ).reset_index()
     
-    # Formatear montos para su correcta visualización estética en la interfaz web
-    df_resumen['Monto_Consolidado'] = df_resumen['Monto_Consolidado'].map(lambda x: f"S/. {x:,.2f}")
+    # Función formateadora dinámica según la moneda de la fila
+    def aplicar_simbolo(row):
+        monto = row['Monto_Consolidado']
+        if 'dolares' in str(row['Moneda']).lower() or 'usd' in str(row['Moneda']).lower():
+            return f"$ {monto:,.2f}"
+        return f"S/. {monto:,.2f}"
+    
+    df_resumen['Monto_Consolidado'] = df_resumen.apply(aplicar_simbolo, axis=1)
     st.dataframe(df_resumen, use_container_width=True)
     
     st.write("---")
