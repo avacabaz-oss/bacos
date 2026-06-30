@@ -38,16 +38,16 @@ if archivo_banco:
         nombre_archivo = archivo_banco.name.lower()
         
         # =========================================================================
-        # LECTOR INTELIGENTE CON FALLBACK DE CODIFICACIÓN (UTF-8 / LATIN-1)
+        # LECTOR INTELIGENTE CON REJILLA ANCHA (EVITA UNIFORMIDAD OBLIGATORIA DE COLUMNAS)
         # =========================================================================
         if nombre_archivo.endswith('.csv'):
             try:
-                # Intento inicial estándar
-                df_raw = pd.read_csv(archivo_banco, header=None, encoding='utf-8')
+                # Se añade 'names=range(50)' para simular una matriz ancha estilo Excel.
+                # Esto evita que colapse si las filas iniciales de metadatos tienen menos columnas que las transacciones.
+                df_raw = pd.read_csv(archivo_banco, header=None, encoding='utf-8', names=range(50))
             except UnicodeDecodeError:
-                # Solución al error: Fallback automático a Latin-1 si encuentra caracteres con tilde
                 archivo_banco.seek(0)
-                df_raw = pd.read_csv(archivo_banco, header=None, encoding='latin-1')
+                df_raw = pd.read_csv(archivo_banco, header=None, encoding='latin-1', names=range(50))
         elif nombre_archivo.endswith('.xls'):
             try:
                 df_raw = pd.read_excel(archivo_banco, header=None, engine='xlrd')
