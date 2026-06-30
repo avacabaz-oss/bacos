@@ -3,3 +3,4 @@ openpyxl
 xlrd
 lxml
 streamlit
+st-gsheets-connection
