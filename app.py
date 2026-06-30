@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit st
 import pandas as pd
 import io
 import re
@@ -37,9 +37,17 @@ if archivo_banco:
     try:
         nombre_archivo = archivo_banco.name.lower()
         
-        # Lector inteligente y controlador de trampas binarias (.xls falsos)
+        # =========================================================================
+        # LECTOR INTELIGENTE CON FALLBACK DE CODIFICACIÓN (UTF-8 / LATIN-1)
+        # =========================================================================
         if nombre_archivo.endswith('.csv'):
-            df_raw = pd.read_csv(archivo_banco, header=None)
+            try:
+                # Intento inicial estándar
+                df_raw = pd.read_csv(archivo_banco, header=None, encoding='utf-8')
+            except UnicodeDecodeError:
+                # Solución al error: Fallback automático a Latin-1 si encuentra caracteres con tilde
+                archivo_banco.seek(0)
+                df_raw = pd.read_csv(archivo_banco, header=None, encoding='latin-1')
         elif nombre_archivo.endswith('.xls'):
             try:
                 df_raw = pd.read_excel(archivo_banco, header=None, engine='xlrd')
@@ -184,7 +192,7 @@ if not st.session_state.df_consolidado.empty:
     kpi5.metric("🔴 Egresos Dólares", f"$ {sum_egr_usd:,.2f}", f"{len(egr_usd)} op.")
     kpi6.metric("⚖️ Balance Dólares", f"$ {neto_usd:,.2f}")
     
-    # --- TABLA ESTRUCTURADA POR ENTIEDAD, CUENTA Y MONEDA ---
+    # --- TABLA ESTRUCTURADA POR ENTIDAD, CUENTA Y MONEDA ---
     st.write("---")
     st.markdown("### 🏦 Consolidado Estructurado por Entidad y Cuenta")
     
@@ -193,7 +201,6 @@ if not st.session_state.df_consolidado.empty:
         Monto_Consolidado=('Monto', 'sum')
     ).reset_index()
     
-    # Función formateadora dinámica según la moneda de la fila
     def aplicar_simbolo(row):
         monto = row['Monto_Consolidado']
         if 'dolares' in str(row['Moneda']).lower() or 'usd' in str(row['Moneda']).lower():
